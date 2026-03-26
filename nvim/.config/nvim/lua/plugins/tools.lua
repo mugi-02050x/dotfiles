@@ -5,6 +5,25 @@ return {
   -- Java LSP (loaded via ftplugin/java.lua)
   { 'mfussenegger/nvim-jdtls' },
 
+  -- Markdown preview in browser
+  {
+    'iamcco/markdown-preview.nvim',
+    cmd = { 'MarkdownPreviewToggle', 'MarkdownPreview', 'MarkdownPreviewStop' },
+    build = 'cd app && npm install',
+    init = function()
+      vim.g.mkdp_filetypes = { 'markdown' }
+    end,
+    ft = { 'markdown' },
+    keys = {
+      {
+        '<leader>mp',
+        '<cmd>MarkdownPreviewToggle<cr>',
+        ft = 'markdown',
+        desc = 'Markdown Preview Toggle',
+      },
+    },
+  },
+
   -- Live Server for HTML/CSS/JS development
   {
     'barrett-ruth/live-server.nvim',
