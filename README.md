@@ -16,6 +16,7 @@ cd dotfiles
 > ```bash
 > mv ~/.zshrc ~/.zshrc.bak
 > mv ~/.config/nvim ~/.config/nvim.bak
+> mv ~/.tmux.conf ~/.tmux.conf.bak
 > ```
 
 ## 構成
@@ -24,3 +25,4 @@ cd dotfiles
 |---|---|
 | zsh | `~/.zshrc` |
 | nvim | `~/.config/nvim/` |
+| tmux | `~/.tmux.conf` |
