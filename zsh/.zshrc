@@ -5,8 +5,6 @@ if command -v brew &>/dev/null; then
   _pm_prefixes+=("$(brew --prefix)")
 elif [[ -x /opt/homebrew/bin/brew ]]; then
   _pm_prefixes+=("/opt/homebrew")
-elif [[ -x /usr/local/bin/brew ]]; then
-  _pm_prefixes+=("/usr/local")
 elif [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
   _pm_prefixes+=("/home/linuxbrew/.linuxbrew")
 fi
@@ -20,6 +18,10 @@ for _p in "${_pm_prefixes[@]}"; do
   [[ -d "$_p/bin" ]]  && PATH="$_p/bin:$PATH"
   [[ -d "$_p/sbin" ]] && PATH="$_p/sbin:$PATH"
 done
+
+# FHS 標準パス（pm_prefix とは独立、手動インストール先）
+[[ -d /usr/local/bin ]]  && PATH="/usr/local/bin:$PATH"
+[[ -d /usr/local/sbin ]] && PATH="/usr/local/sbin:$PATH"
 
 [[ -d "$HOME/.local/bin" ]]                                        && PATH="$HOME/.local/bin:$PATH"
 [[ -d "$HOME/.nodebrew/current/bin" ]]                             && PATH="$HOME/.nodebrew/current/bin:$PATH"
