@@ -25,7 +25,6 @@ done
 [[ -d "$HOME/.nodebrew/current/bin" ]]                             && PATH="$HOME/.nodebrew/current/bin:$PATH"
 [[ -d "$HOME/.nodebrew/current/sbin" ]]                            && PATH="$HOME/.nodebrew/current/sbin:$PATH"
 [[ -d "/Applications/VMware Fusion.app/Contents/Public" ]]         && PATH="/Applications/VMware Fusion.app/Contents/Public:$PATH"
-[[ -d "/Library/Frameworks/Python.framework/Versions/3.10/bin" ]]  && PATH="/Library/Frameworks/Python.framework/Versions/3.10/bin:$PATH"
 
 export PATH
 
