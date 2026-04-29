@@ -40,10 +40,17 @@ done
 export PATH
 
 # --- JAVA_HOME 解決 ---
+# 検出結果を一旦この変数に格納し、最終的に export する流れ
 _java_home=""
+
+# 第一優先: macOS 標準の java_home ヘルパー経由（Oracle JDK / Zulu / Temurin など
+# システムに登録されたあらゆる JDK を横断検索できる。-v 25 で JDK 25 を要求）
 if [[ -x /usr/libexec/java_home ]]; then
   _java_home="$(/usr/libexec/java_home -v 25 2>/dev/null)"
 fi
+
+# 第二優先: Homebrew / Linuxbrew 等で導入した openjdk@25 を直接探索
+# (java_home に登録されない formula 配置の JDK を拾うためのフォールバック)
 if [[ -z "$_java_home" ]]; then
   for _p in "${_pm_prefixes[@]:-}"; do
     if [[ -d "$_p/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home" ]]; then
