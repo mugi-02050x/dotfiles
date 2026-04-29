@@ -44,10 +44,13 @@ if ! command -v node &>/dev/null; then
   export PATH="$HOME/.nodebrew/current/bin:$PATH"
 fi
 
-# グローバル npm パッケージ（tmux <prefix>o で呼ぶ codex など）
-if command -v npm &>/dev/null; then
+# グローバル npm パッケージ（追加はこの配列に行を増やす）
+NPM_GLOBALS=(
+  "@openai/codex"   # tmux <prefix>o
+)
+if command -v npm &>/dev/null && [[ ${#NPM_GLOBALS[@]} -gt 0 ]]; then
   echo "Installing global npm packages..."
-  npm install -g @openai/codex
+  npm install -g "${NPM_GLOBALS[@]}"
 fi
 
 # symlink 配置
