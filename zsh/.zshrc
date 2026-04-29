@@ -2,15 +2,21 @@
 typeset -a _pm_prefixes
 
 if command -v brew &>/dev/null; then
+  # Homebrew: PATH 上で見つかる場合は brew --prefix を信頼（カスタム配置や Linuxbrew にも対応）
   _pm_prefixes+=("$(brew --prefix)")
 elif [[ -x /opt/homebrew/bin/brew ]]; then
+  # Homebrew: Apple Silicon Mac の標準インストール先
   _pm_prefixes+=("/opt/homebrew")
 elif [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+  # Homebrew: Linux 版（Linuxbrew）の標準インストール先
   _pm_prefixes+=("/home/linuxbrew/.linuxbrew")
 fi
 
+# MacPorts: macOS 向けの別系統パッケージマネージャー、prefix は固定
 [[ -d /opt/local ]] && _pm_prefixes+=("/opt/local")
+# Nix: ユーザー単位プロファイル（single-user / per-user インストール時）
 [[ -d "$HOME/.nix-profile" ]] && _pm_prefixes+=("$HOME/.nix-profile")
+# Nix: システム共通プロファイル（multi-user インストール時のデフォルト）
 [[ -d /nix/var/nix/profiles/default ]] && _pm_prefixes+=("/nix/var/nix/profiles/default")
 
 # --- PATH 構築 ---
@@ -23,9 +29,12 @@ done
 [[ -d /usr/local/bin ]]  && PATH="/usr/local/bin:$PATH"
 [[ -d /usr/local/sbin ]] && PATH="/usr/local/sbin:$PATH"
 
+# ユーザー単位ローカルバイナリ（pipx、pip --user、cargo install など / XDG 慣習）
 [[ -d "$HOME/.local/bin" ]]                                        && PATH="$HOME/.local/bin:$PATH"
+# nodebrew が選択中の Node.js バージョン（node, npm, グローバルインストール CLI）
 [[ -d "$HOME/.nodebrew/current/bin" ]]                             && PATH="$HOME/.nodebrew/current/bin:$PATH"
 [[ -d "$HOME/.nodebrew/current/sbin" ]]                            && PATH="$HOME/.nodebrew/current/sbin:$PATH"
+# VMware Fusion の CLI ツール（vmrun、ovftool など）
 [[ -d "/Applications/VMware Fusion.app/Contents/Public" ]]         && PATH="/Applications/VMware Fusion.app/Contents/Public:$PATH"
 
 export PATH
