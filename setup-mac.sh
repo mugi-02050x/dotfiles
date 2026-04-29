@@ -31,6 +31,25 @@ fi
 echo "Installing packages from Brewfile..."
 brew bundle --file="$DOTFILES_DIR/Brewfile"
 
+# Node.js（nodebrew で最新版を導入）
+if ! command -v node &>/dev/null; then
+  echo "Installing Node.js via nodebrew..."
+  nodebrew setup 2>/dev/null || true
+  nodebrew install-binary latest
+  _latest_node="$(find "$HOME/.nodebrew/node" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | sort -V | tail -1)"
+  if [[ -n "${_latest_node:-}" ]]; then
+    nodebrew use "$_latest_node"
+  fi
+  unset _latest_node
+  export PATH="$HOME/.nodebrew/current/bin:$PATH"
+fi
+
+# グローバル npm パッケージ（tmux <prefix>o で呼ぶ codex など）
+if command -v npm &>/dev/null; then
+  echo "Installing global npm packages..."
+  npm install -g @openai/codex
+fi
+
 # symlink 配置
 echo "Linking dotfiles..."
 "$DOTFILES_DIR/install.sh"
