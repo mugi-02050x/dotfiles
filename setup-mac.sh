@@ -46,7 +46,8 @@ fi
 
 # グローバル npm パッケージ（追加はこの配列に行を増やす）
 NPM_GLOBALS=(
-  "@openai/codex"   # tmux <prefix>o
+  "@openai/codex"      # tmux <prefix>o
+  "obsidian-headless"  # Obsidian 自動化 CLI
 )
 if command -v npm &>/dev/null && [[ ${#NPM_GLOBALS[@]} -gt 0 ]]; then
   echo "Installing global npm packages..."
