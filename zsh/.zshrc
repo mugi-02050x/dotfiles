@@ -20,10 +20,12 @@ fi
 [[ -d /nix/var/nix/profiles/default ]] && _pm_prefixes+=("/nix/var/nix/profiles/default")
 
 # --- PATH 構築 ---
-for _p in "${_pm_prefixes[@]}"; do
-  [[ -d "$_p/bin" ]]  && PATH="$_p/bin:$PATH"
-  [[ -d "$_p/sbin" ]] && PATH="$_p/sbin:$PATH"
-done
+# 「先頭追加」方式: 低優先のものから順に追加する（後から追加したものほど PATH 先頭=高優先になる）
+# 最終的な優先順位（高い順）:
+#   JAVA_HOME → nodebrew → Homebrew(pm_prefixes) → ~/.local/bin → /usr/local → VMware → 元の PATH
+
+# VMware Fusion の CLI ツール（vmrun、ovftool など）— 使用頻度が低く名前衝突もないので最下位
+[[ -d "/Applications/VMware Fusion.app/Contents/Public" ]]         && PATH="/Applications/VMware Fusion.app/Contents/Public:$PATH"
 
 # FHS 標準パス（pm_prefix とは独立、手動インストール先）
 [[ -d /usr/local/bin ]]  && PATH="/usr/local/bin:$PATH"
@@ -31,11 +33,17 @@ done
 
 # ユーザー単位ローカルバイナリ（pipx、pip --user、cargo install など / XDG 慣習）
 [[ -d "$HOME/.local/bin" ]]                                        && PATH="$HOME/.local/bin:$PATH"
+
+# パッケージマネージャ（Homebrew 等）— 同名コマンドがあれば手動インストールより優先したい
+for _p in "${_pm_prefixes[@]}"; do
+  [[ -d "$_p/bin" ]]  && PATH="$_p/bin:$PATH"
+  [[ -d "$_p/sbin" ]] && PATH="$_p/sbin:$PATH"
+done
+
 # nodebrew が選択中の Node.js バージョン（node, npm, グローバルインストール CLI）
+# Homebrew 版 node より優先したいので Homebrew より後に追加
 [[ -d "$HOME/.nodebrew/current/bin" ]]                             && PATH="$HOME/.nodebrew/current/bin:$PATH"
 [[ -d "$HOME/.nodebrew/current/sbin" ]]                            && PATH="$HOME/.nodebrew/current/sbin:$PATH"
-# VMware Fusion の CLI ツール（vmrun、ovftool など）
-[[ -d "/Applications/VMware Fusion.app/Contents/Public" ]]         && PATH="/Applications/VMware Fusion.app/Contents/Public:$PATH"
 
 export PATH
 
