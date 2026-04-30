@@ -22,10 +22,7 @@ fi
 # --- PATH 構築 ---
 # 「先頭追加」方式: 低優先のものから順に追加する（後から追加したものほど PATH 先頭=高優先になる）
 # 最終的な優先順位（高い順）:
-#   JAVA_HOME → nodebrew → Homebrew(pm_prefixes) → ~/.local/bin → /usr/local → VMware → 元の PATH
-
-# VMware Fusion の CLI ツール（vmrun、ovftool など）— 使用頻度が低く名前衝突もないので最下位
-[[ -d "/Applications/VMware Fusion.app/Contents/Public" ]]         && PATH="/Applications/VMware Fusion.app/Contents/Public:$PATH"
+#   JAVA_HOME → nodebrew → Homebrew(pm_prefixes) → ~/.local/bin → /usr/local → 元の PATH
 
 # FHS 標準パス（pm_prefix とは独立、手動インストール先）
 [[ -d /usr/local/bin ]]  && PATH="/usr/local/bin:$PATH"
