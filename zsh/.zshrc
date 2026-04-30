@@ -43,18 +43,37 @@ export PATH
 # 検出結果を一旦この変数に格納し、最終的に export する流れ
 _java_home=""
 
-# 第一優先: macOS 標準の java_home ヘルパー経由（Oracle JDK / Zulu / Temurin など
-# システムに登録されたあらゆる JDK を横断検索できる。-v 25 で JDK 25 を要求）
+# 第一優先: macOS の java_home ヘルパー（システム登録された全 JDK を横断検索）
 if [[ -x /usr/libexec/java_home ]]; then
   _java_home="$(/usr/libexec/java_home -v 25 2>/dev/null)"
 fi
 
-# 第二優先: Homebrew / Linuxbrew 等で導入した openjdk@25 を直接探索
+# 第二優先: Linux 標準の JVM 配置先（Debian/Ubuntu の openjdk-25-jdk パッケージ）
+if [[ -z "$_java_home" ]]; then
+  for _candidate in \
+    /usr/lib/jvm/java-25-openjdk-amd64 \
+    /usr/lib/jvm/java-25-openjdk-arm64 \
+    /usr/lib/jvm/default-java; do
+    if [[ -d "$_candidate" ]]; then
+      _java_home="$_candidate"
+      break
+    fi
+  done
+  unset _candidate
+fi
+
+# 第三優先: Homebrew / Linuxbrew で導入した openjdk@25 formula を直接探索
 # (java_home に登録されない formula 配置の JDK を拾うためのフォールバック)
 if [[ -z "$_java_home" ]]; then
   for _p in "${_pm_prefixes[@]:-}"; do
+    # macOS Homebrew 形式（Contents/Home 階層あり）
     if [[ -d "$_p/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home" ]]; then
       _java_home="$_p/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home"
+      break
+    fi
+    # Linuxbrew 形式（Contents/Home 階層なし）
+    if [[ -d "$_p/opt/openjdk@25/libexec" ]]; then
+      _java_home="$_p/opt/openjdk@25/libexec"
       break
     fi
   done
