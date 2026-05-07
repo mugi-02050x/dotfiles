@@ -1,0 +1,53 @@
+#!/bin/sh
+set -eu
+
+tmp="$(mktemp "${TMPDIR:-/tmp}/clip.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+if [ "$#" -gt 0 ]; then
+  printf '%s' "$*" >"$tmp"
+else
+  cat >"$tmp"
+fi
+
+if [ -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ] && command -v pbcopy >/dev/null 2>&1; then
+  pbcopy <"$tmp"
+  exit 0
+fi
+
+output=
+tmux_passthrough=0
+
+if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
+  client_tty="$(tmux display-message -p '#{client_tty}' 2>/dev/null || true)"
+  if [ -n "$client_tty" ] && [ -w "$client_tty" ]; then
+    output="$client_tty"
+  else
+    tmux_passthrough=1
+  fi
+fi
+
+if [ -z "$output" ] && [ -t 1 ]; then
+  output=-
+elif [ -z "$output" ] && [ -w /dev/tty ]; then
+  output=/dev/tty
+fi
+
+if [ -z "$output" ]; then
+  printf '%s\n' 'clip: no terminal available for OSC 52 clipboard copy' >&2
+  exit 1
+fi
+
+encoded="$(base64 <"$tmp" | tr -d '\n')"
+
+if [ "$tmux_passthrough" -eq 1 ]; then
+  sequence="$(printf '\033Ptmux;\033\033]52;c;%s\a\033\\' "$encoded")"
+else
+  sequence="$(printf '\033]52;c;%s\a' "$encoded")"
+fi
+
+if [ "$output" = - ]; then
+  printf '%s' "$sequence"
+else
+  printf '%s' "$sequence" >"$output"
+fi
