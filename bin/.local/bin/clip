@@ -4,12 +4,14 @@ set -eu
 tmp="$(mktemp "${TMPDIR:-/tmp}/clip.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
 
+# 引数があれば引数を、なければパイプや標準入力の内容を受け取る。
 if [ "$#" -gt 0 ]; then
   printf '%s' "$*" >"$tmp"
 else
   cat >"$tmp"
 fi
 
+# ローカルのmacOS上では通常のpbcopyを使う。
 if [ -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ] && command -v pbcopy >/dev/null 2>&1; then
   pbcopy <"$tmp"
   exit 0
@@ -18,15 +20,18 @@ fi
 output=
 tmux_passthrough=0
 
+# tmux内では、接続元クライアントのTTYへOSC 52を直接送る。
 if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
   client_tty="$(tmux display-message -p '#{client_tty}' 2>/dev/null || true)"
   if [ -n "$client_tty" ] && [ -w "$client_tty" ]; then
     output="$client_tty"
   else
+    # クライアントTTYが使えない場合はtmux passthroughに切り替える。
     tmux_passthrough=1
   fi
 fi
 
+# tmux外では標準出力、または制御端末へシーケンスを送る。
 if [ -z "$output" ] && [ -t 1 ]; then
   output=-
 elif [ -z "$output" ] && [ -w /dev/tty ]; then
@@ -40,12 +45,14 @@ fi
 
 encoded="$(base64 <"$tmp" | tr -d '\n')"
 
+# OSC 52はクリップボード内容をbase64で運ぶ。tmux passthrough時はラップする。
 if [ "$tmux_passthrough" -eq 1 ]; then
   sequence="$(printf '\033Ptmux;\033\033]52;c;%s\a\033\\' "$encoded")"
 else
   sequence="$(printf '\033]52;c;%s\a' "$encoded")"
 fi
 
+# 改行を追加せずにエスケープシーケンスを出力する。
 if [ "$output" = - ]; then
   printf '%s' "$sequence"
 else
