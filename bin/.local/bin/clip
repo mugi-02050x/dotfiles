@@ -21,9 +21,23 @@ output=
 tmux_passthrough=0
 
 # tmux内では、接続元クライアントのTTYへOSC 52を直接送る。
+# popup内で別セッションにattachしている場合、client_ttyはpopupペインのTTYになるため、
+# 実SSH端末のTTYがtmux clientとして存在するならそちらを優先する。
 if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
   client_tty="$(tmux display-message -p '#{client_tty}' 2>/dev/null || true)"
-  if [ -n "$client_tty" ] && [ -w "$client_tty" ]; then
+  ssh_tty_attached=0
+  if [ -n "${SSH_TTY:-}" ] && [ -w "$SSH_TTY" ]; then
+    for tty in $(tmux list-clients -F '#{client_tty}' 2>/dev/null || true); do
+      if [ "$tty" = "$SSH_TTY" ]; then
+        ssh_tty_attached=1
+        break
+      fi
+    done
+  fi
+
+  if [ "$ssh_tty_attached" -eq 1 ] && [ "$client_tty" != "$SSH_TTY" ]; then
+    output="$SSH_TTY"
+  elif [ -n "$client_tty" ] && [ -w "$client_tty" ]; then
     output="$client_tty"
   else
     # クライアントTTYが使えない場合はtmux passthroughに切り替える。
