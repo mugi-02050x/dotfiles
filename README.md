@@ -26,3 +26,17 @@ cd dotfiles
 | zsh | `~/.zshrc` |
 | nvim | `~/.config/nvim/` |
 | tmux | `~/.tmux.conf` |
+| bin | `~/.local/bin/` |
+
+## SSH元クリップボードへのコピー
+
+SSH接続中は `clip` コマンドがOSC 52を使ってSSHクライアント側のクリップボードへコピーします。
+
+```bash
+echo "copy me" | clip
+clip "copy me"
+```
+
+tmuxのコピーモードでは `y` / `Enter` で `clip` に渡します。NeovimはSSH接続中のみ通常のyankを内部レジスタに残したまま `clip` へミラーし、`"+y` も `clip` 経由にします。
+
+Windows TerminalなどOSC 52対応のSSHクライアントで動作します。AndroidのSSHクライアントはOSC 52対応状況に依存します。

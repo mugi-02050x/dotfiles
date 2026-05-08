@@ -7,5 +7,6 @@ cd "$DOTFILES_DIR"
 stow --target="$HOME" zsh
 stow --target="$HOME" nvim
 stow --target="$HOME" tmux
+stow --target="$HOME" bin
 
 echo "Done!"
