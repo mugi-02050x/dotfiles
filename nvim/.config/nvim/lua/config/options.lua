@@ -7,7 +7,24 @@ vim.o.mouse = 'a'
 vim.o.showmode = false
 
 -- Sync clipboard between OS and Neovim.
-vim.schedule(function() vim.o.clipboard = 'unnamedplus' end)
+local use_ssh_clipboard = (vim.env.SSH_CONNECTION or vim.env.SSH_TTY) and vim.fn.executable('clip') == 1
+if use_ssh_clipboard then
+  vim.g.ssh_clipboard_copy = true
+  vim.g.clipboard = {
+    name = 'OSC 52',
+    copy = {
+      ['+'] = 'clip',
+      ['*'] = 'clip',
+    },
+    paste = {
+      ['+'] = 'cat /dev/null',
+      ['*'] = 'cat /dev/null',
+    },
+    cache_enabled = 0,
+  }
+else
+  vim.schedule(function() vim.o.clipboard = 'unnamedplus' end)
+end
 
 vim.o.breakindent = true
 vim.o.undofile = true
