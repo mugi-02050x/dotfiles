@@ -10,6 +10,11 @@ if not status then
   return
 end
 
+local bufnr = vim.api.nvim_get_current_buf()
+local bufname = vim.api.nvim_buf_get_name(bufnr)
+-- JDTLS expects a real file URI; skip scratch/special Java buffers that would resolve to file://.
+if bufname == '' or vim.bo[bufnr].buftype ~= '' then return end
+
 local extendedClientCapabilities = jdtls.extendedClientCapabilities
 
 local bundles = {}
@@ -84,7 +89,7 @@ local config = {
         },
       },
       format = {
-        eabled = true,
+        enabled = true,
       },
     },
   },
@@ -94,9 +99,51 @@ local config = {
   },
 }
 
-config['on_attach'] = function(client, bufnr)
-  jdtls.setup_dap { hotcodereplace = 'auto' }
-  require('jdtls.dap').setup_dap_main_class_configs()
+config['on_attach'] = function()
+  local dap_ok, dap = pcall(require, 'dap')
+  if not dap_ok then return end
+
+  jdtls.setup_dap { config_overrides = {}, hotcodereplace = 'auto' }
+  if dap.providers and dap.providers.configs then dap.providers.configs['jdtls'] = nil end
+
+  local jdtls_dap = require 'jdtls.dap'
+  -- Build separate entries for debugging and noDebug runs from the same discovered main classes.
+  jdtls_dap.fetch_main_configs({ config_overrides = { noDebug = false } }, function(configurations)
+    local dap_configurations = dap.configurations.java or {}
+
+    local function remove_main_class_configs(main_config)
+      for i = #dap_configurations, 1, -1 do
+        local existing_config = dap_configurations[i]
+        if
+          existing_config.type == 'java'
+          and existing_config.request == 'launch'
+          and existing_config.mainClass == main_config.mainClass
+          and existing_config.projectName == main_config.projectName
+          and existing_config.cwd == main_config.cwd
+        then
+          table.remove(dap_configurations, i)
+        end
+      end
+    end
+
+    local function append_config(dap_config) table.insert(dap_configurations, dap_config) end
+
+    for _, main_config in ipairs(configurations) do
+      remove_main_class_configs(main_config)
+
+      local debug_config = vim.deepcopy(main_config)
+      debug_config.name = debug_config.name:gsub('^Launch ', 'Debug ', 1)
+      debug_config.noDebug = false
+      append_config(debug_config)
+
+      local run_config = vim.deepcopy(main_config)
+      run_config.name = run_config.name:gsub('^Launch ', 'Run ', 1)
+      run_config.noDebug = true
+      append_config(run_config)
+    end
+
+    dap.configurations.java = dap_configurations
+  end)
 end
 
 jdtls.start_or_attach(config)
