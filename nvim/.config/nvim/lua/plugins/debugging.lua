@@ -69,6 +69,8 @@ return {
   },
   config = function(_, opts)
     local dap = require 'dap'
+    dap.defaults.fallback.terminal_win_cmd = 'botright 15new'
+    dap.defaults.fallback.focus_terminal = true
     require('dapui').setup(opts)
 
     -- Breakpoint signs
@@ -81,35 +83,38 @@ return {
     vim.fn.sign_define('DapLogPoint', { text = '', texthl = 'DiagnosticSignInfo', linehl = '', numhl = '' })
 
     -- Keymaps
-    vim.keymap.set('n', '<leader>bb', "<cmd>lua require'dap'.toggle_breakpoint()<cr>")
-    vim.keymap.set('n', '<leader>bc', "<cmd>lua require'dap'.set_breakpoint(vim.fn.input('Breakpoint condition: '))<cr>")
-    vim.keymap.set('n', '<leader>bl', "<cmd>lua require'dap'.set_breakpoint(nil, nil, vim.fn.input('Log point message: '))<cr>")
-    vim.keymap.set('n', '<leader>br', "<cmd>lua require'dap'.clear_breakpoints()<cr>")
-    vim.keymap.set('n', '<leader>ba', '<cmd>Telescope dap list_breakpoints<cr>')
-    vim.keymap.set('n', '<leader>dc', "<cmd>lua require'dap'.continue()<cr>")
-    vim.keymap.set('n', '<leader>dj', "<cmd>lua require'dap'.step_over()<cr>")
-    vim.keymap.set('n', '<leader>dk', "<cmd>lua require'dap'.step_into()<cr>")
-    vim.keymap.set('n', '<leader>do', "<cmd>lua require'dap'.step_out()<cr>")
+    vim.keymap.set('n', '<leader>bb', "<cmd>lua require'dap'.toggle_breakpoint()<cr>", { desc = 'Toggle Breakpoint' })
+    vim.keymap.set('n', '<leader>bc', "<cmd>lua require'dap'.set_breakpoint(vim.fn.input('Breakpoint condition: '))<cr>", { desc = 'Conditional Breakpoint' })
+    vim.keymap.set('n', '<leader>bl', "<cmd>lua require'dap'.set_breakpoint(nil, nil, vim.fn.input('Log point message: '))<cr>", { desc = 'Logpoint' })
+    vim.keymap.set('n', '<leader>br', "<cmd>lua require'dap'.clear_breakpoints()<cr>", { desc = 'Clear Breakpoints' })
+    vim.keymap.set('n', '<leader>ba', '<cmd>Telescope dap list_breakpoints<cr>', { desc = 'List Breakpoints' })
+    vim.keymap.set('n', '<leader>dc', "<cmd>lua require'dap'.continue()<cr>", { desc = 'Debug Continue' })
+    vim.keymap.set('n', '<leader>dj', "<cmd>lua require'dap'.step_over()<cr>", { desc = 'Debug Step Over' })
+    vim.keymap.set('n', '<leader>dk', "<cmd>lua require'dap'.step_into()<cr>", { desc = 'Debug Step Into' })
+    vim.keymap.set('n', '<leader>do', "<cmd>lua require'dap'.step_out()<cr>", { desc = 'Debug Step Out' })
     vim.keymap.set('n', '<leader>dd', function()
       require('dap').disconnect()
       require('dapui').close()
-    end)
+    end, { desc = 'Debug Disconnect' })
     vim.keymap.set('n', '<leader>dt', function()
       require('dap').terminate()
       require('dapui').close()
-    end)
-    vim.keymap.set('n', '<leader>dr', "<cmd>lua require'dap'.repl.toggle()<cr>")
-    vim.keymap.set('n', '<leader>dl', "<cmd>lua require'dap'.run_last()<cr>")
-    vim.keymap.set('n', '<leader>di', function() require('dap.ui.widgets').hover() end)
+    end, { desc = 'Debug Terminate' })
+    vim.keymap.set('n', '<leader>dr', "<cmd>lua require'dap'.repl.toggle()<cr>", { desc = 'Debug REPL' })
+    vim.keymap.set('n', '<leader>dl', "<cmd>lua require'dap'.run_last()<cr>", { desc = 'Debug Run Last' })
+    vim.keymap.set('n', '<leader>di', function() require('dap.ui.widgets').hover() end, { desc = 'Debug Inspect' })
     vim.keymap.set('n', '<leader>d?', function()
       local widgets = require 'dap.ui.widgets'
       widgets.centered_float(widgets.scopes)
-    end)
-    vim.keymap.set('n', '<leader>df', '<cmd>Telescope dap frames<cr>')
-    vim.keymap.set('n', '<leader>dh', '<cmd>Telescope dap commands<cr>')
-    vim.keymap.set('n', '<leader>de', function() require('telescope.builtin').diagnostics { default_text = ':E:' } end)
+    end, { desc = 'Debug Scopes' })
+    vim.keymap.set('n', '<leader>df', '<cmd>Telescope dap frames<cr>', { desc = 'Debug Frames' })
+    vim.keymap.set('n', '<leader>dh', '<cmd>Telescope dap commands<cr>', { desc = 'Debug Commands' })
+    vim.keymap.set('n', '<leader>de', function() require('telescope.builtin').diagnostics { default_text = ':E:' } end, { desc = 'Error Diagnostics' })
 
-    dap.listeners.after.event_initialized['dapui_config'] = function() require('dapui').open() end
+    dap.listeners.after.event_initialized['dapui_config'] = function(session)
+      if session.config.noDebug then return end
+      require('dapui').open()
+    end
     dap.listeners.before.event_terminated['dapui_config'] = function()
       -- Commented to prevent DAP UI from closing when unit tests finish
       -- require('dapui').close()

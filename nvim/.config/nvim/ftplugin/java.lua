@@ -10,6 +10,10 @@ if not status then
   return
 end
 
+local bufnr = vim.api.nvim_get_current_buf()
+local bufname = vim.api.nvim_buf_get_name(bufnr)
+if bufname == '' or vim.bo[bufnr].buftype ~= '' then return end
+
 local extendedClientCapabilities = jdtls.extendedClientCapabilities
 
 local bundles = {}
@@ -84,7 +88,7 @@ local config = {
         },
       },
       format = {
-        eabled = true,
+        enabled = true,
       },
     },
   },
@@ -94,9 +98,18 @@ local config = {
   },
 }
 
-config['on_attach'] = function(client, bufnr)
-  jdtls.setup_dap { hotcodereplace = 'auto' }
-  require('jdtls.dap').setup_dap_main_class_configs()
+config['on_attach'] = function()
+  local dap_ok, dap = pcall(require, 'dap')
+  if dap_ok then
+    dap.defaults.fallback.terminal_win_cmd = 'botright 15new'
+    dap.defaults.fallback.focus_terminal = true
+  end
+  jdtls.setup_dap { config_overrides = {}, hotcodereplace = 'auto' }
+  require('jdtls.dap').setup_dap_main_class_configs {
+    config_overrides = {
+      noDebug = true,
+    },
+  }
 end
 
 jdtls.start_or_attach(config)
