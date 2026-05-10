@@ -12,6 +12,7 @@ end
 
 local bufnr = vim.api.nvim_get_current_buf()
 local bufname = vim.api.nvim_buf_get_name(bufnr)
+-- JDTLS expects a real file URI; skip scratch/special Java buffers that would resolve to file://.
 if bufname == '' or vim.bo[bufnr].buftype ~= '' then return end
 
 local extendedClientCapabilities = jdtls.extendedClientCapabilities
