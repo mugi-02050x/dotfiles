@@ -101,16 +101,49 @@ local config = {
 
 config['on_attach'] = function()
   local dap_ok, dap = pcall(require, 'dap')
-  if dap_ok then
-    dap.defaults.fallback.terminal_win_cmd = 'botright 15new'
-    dap.defaults.fallback.focus_terminal = true
-  end
+  if not dap_ok then return end
+
   jdtls.setup_dap { config_overrides = {}, hotcodereplace = 'auto' }
-  require('jdtls.dap').setup_dap_main_class_configs {
-    config_overrides = {
-      noDebug = true,
-    },
-  }
+  if dap.providers and dap.providers.configs then dap.providers.configs['jdtls'] = nil end
+
+  local jdtls_dap = require 'jdtls.dap'
+  -- Build separate entries for debugging and noDebug runs from the same discovered main classes.
+  jdtls_dap.fetch_main_configs({ config_overrides = { noDebug = false } }, function(configurations)
+    local dap_configurations = dap.configurations.java or {}
+
+    local function remove_main_class_configs(config)
+      for i = #dap_configurations, 1, -1 do
+        local existing_config = dap_configurations[i]
+        if
+          existing_config.type == 'java'
+          and existing_config.request == 'launch'
+          and existing_config.mainClass == config.mainClass
+          and existing_config.projectName == config.projectName
+          and existing_config.cwd == config.cwd
+        then
+          table.remove(dap_configurations, i)
+        end
+      end
+    end
+
+    local function append_config(config) table.insert(dap_configurations, config) end
+
+    for _, config in ipairs(configurations) do
+      remove_main_class_configs(config)
+
+      local debug_config = vim.deepcopy(config)
+      debug_config.name = debug_config.name:gsub('^Launch ', 'Debug ', 1)
+      debug_config.noDebug = false
+      append_config(debug_config)
+
+      local run_config = vim.deepcopy(config)
+      run_config.name = run_config.name:gsub('^Launch ', 'Run ', 1)
+      run_config.noDebug = true
+      append_config(run_config)
+    end
+
+    dap.configurations.java = dap_configurations
+  end)
 end
 
 jdtls.start_or_attach(config)
