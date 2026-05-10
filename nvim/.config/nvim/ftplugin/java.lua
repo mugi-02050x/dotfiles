@@ -111,32 +111,32 @@ config['on_attach'] = function()
   jdtls_dap.fetch_main_configs({ config_overrides = { noDebug = false } }, function(configurations)
     local dap_configurations = dap.configurations.java or {}
 
-    local function remove_main_class_configs(config)
+    local function remove_main_class_configs(main_config)
       for i = #dap_configurations, 1, -1 do
         local existing_config = dap_configurations[i]
         if
           existing_config.type == 'java'
           and existing_config.request == 'launch'
-          and existing_config.mainClass == config.mainClass
-          and existing_config.projectName == config.projectName
-          and existing_config.cwd == config.cwd
+          and existing_config.mainClass == main_config.mainClass
+          and existing_config.projectName == main_config.projectName
+          and existing_config.cwd == main_config.cwd
         then
           table.remove(dap_configurations, i)
         end
       end
     end
 
-    local function append_config(config) table.insert(dap_configurations, config) end
+    local function append_config(dap_config) table.insert(dap_configurations, dap_config) end
 
-    for _, config in ipairs(configurations) do
-      remove_main_class_configs(config)
+    for _, main_config in ipairs(configurations) do
+      remove_main_class_configs(main_config)
 
-      local debug_config = vim.deepcopy(config)
+      local debug_config = vim.deepcopy(main_config)
       debug_config.name = debug_config.name:gsub('^Launch ', 'Debug ', 1)
       debug_config.noDebug = false
       append_config(debug_config)
 
-      local run_config = vim.deepcopy(config)
+      local run_config = vim.deepcopy(main_config)
       run_config.name = run_config.name:gsub('^Launch ', 'Run ', 1)
       run_config.noDebug = true
       append_config(run_config)
