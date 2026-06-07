@@ -14,9 +14,6 @@ brew "git"
 brew "gh"
 brew "lazygit"          # tmux <prefix>g
 
-# --- AI CLI（tmux ポップアップから呼ぶ）---
-brew "gemini-cli"       # tmux <prefix>G
-
 # --- nvim プラグインビルド依存 ---
 brew "make"
 brew "cmake"
@@ -33,7 +30,6 @@ brew "unzip"
 # --- Python ツール ---
 brew "uv"
 brew "ruff"
-brew "basedpyright"
 
 # --- 開発便利ツール ---
 brew "fzf"
