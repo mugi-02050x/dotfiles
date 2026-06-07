@@ -46,11 +46,20 @@ fi
 
 # グローバル npm パッケージ（追加はこの配列に行を増やす）
 NPM_GLOBALS=(
-  "obsidian-headless"  # Obsidian 自動化 CLI
+  "@google/gemini-cli"  # tmux <prefix>G
+  "basedpyright"        # Python LSP / type checker
+  "obsidian-headless"   # Obsidian 自動化 CLI
 )
 if command -v npm &>/dev/null && [[ ${#NPM_GLOBALS[@]} -gt 0 ]]; then
   echo "Installing global npm packages..."
   npm install -g "${NPM_GLOBALS[@]}"
+  _npm_global_root="$(npm root -g)"
+  _better_sqlite3_dir="$_npm_global_root/obsidian-headless/node_modules/better-sqlite3"
+  if [[ -d "$_better_sqlite3_dir" ]]; then
+    echo "Rebuilding obsidian-headless native dependencies..."
+    (cd "$_better_sqlite3_dir" && npm rebuild --ignore-scripts=false)
+  fi
+  unset _npm_global_root _better_sqlite3_dir
 fi
 
 # Codex CLI は remote-control/app-server daemon が standalone layout を前提にするため、
