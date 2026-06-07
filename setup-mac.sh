@@ -46,13 +46,22 @@ fi
 
 # グローバル npm パッケージ（追加はこの配列に行を増やす）
 NPM_GLOBALS=(
-  "@openai/codex"      # tmux <prefix>o
   "obsidian-headless"  # Obsidian 自動化 CLI
 )
 if command -v npm &>/dev/null && [[ ${#NPM_GLOBALS[@]} -gt 0 ]]; then
   echo "Installing global npm packages..."
   npm install -g "${NPM_GLOBALS[@]}"
 fi
+
+# Codex CLI は remote-control/app-server daemon が standalone layout を前提にするため、
+# npm global ではなく公式 standalone installer で導入する。
+if command -v npm &>/dev/null && npm list -g @openai/codex --depth=0 &>/dev/null; then
+  echo "Removing npm-managed Codex CLI..."
+  npm uninstall -g @openai/codex
+fi
+
+echo "Installing Codex CLI standalone..."
+curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
 
 # symlink 配置
 echo "Linking dotfiles..."
