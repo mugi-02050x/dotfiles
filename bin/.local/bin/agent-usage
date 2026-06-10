@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+"""
+各エージェント（Claude Code / Codex）のレート制限利用率を表示する tmux ポップアップ用ビューア。
+
+起動時に有効なエージェントの利用率を並行取得して ~/.cache/agent-usage/state.json を更新し、
+プログレスバー付きで表示する。デーモン常駐はせず、表示後はキー入力のみ待つ。
+前回取得から55秒未満の場合はキャッシュを再利用する（429対策）。
+
+単体実行:
+    agent-usage
+
+キー操作:
+    r  再取得（55秒のキャッシュTTLは尊重）
+    q  終了
+
+設定ファイル（任意）: ~/.config/agent-usage/config.json
+    {
+      "agents": {
+        "claude": {"enabled": true},
+        "codex": {"enabled": false}
+      }
+    }
+    enabled: false のエージェントは取得・表示ともにスキップされる。
+    ファイルがない場合、および記載のないエージェントは enabled: true 扱い。
+
+エージェントの追加手順:
+    1. AgentResult を返す fetch_<name>() を実装する
+       （windows に表示ラベル・利用率%・リセット時刻を正規化して詰める）
+    2. AGENT_REGISTRY に {"name", "label", "fetch"} を1行追加する
+    表示・キャッシュ・設定はレジストリ駆動のため、他の変更は不要。
+"""
+
+import json
+import subprocess
+import sys
+import termios
+import time
+import tty
+import urllib.error
+import urllib.request
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
+from threading import Thread, Timer
+from typing import TypedDict
+
+STATE_PATH = Path.home() / ".cache" / "agent-usage" / "state.json"
+CONFIG_PATH = Path.home() / ".config" / "agent-usage" / "config.json"
+CACHE_TTL_SECONDS = 55
+CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+KEYCHAIN_SERVICE = "Claude Code-credentials"
+CODEX_TIMEOUT_SECONDS = 15
+BAR_WIDTH = 15
+
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+DIM = "\033[2m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+
+class WindowResult(TypedDict):
+    label: str
+    pct: float | None
+    resets_at: str | int | None
+
+
+class AgentResult(TypedDict):
+    windows: list[WindowResult]
+    error: str | None
+
+
+class AgentSpec(TypedDict):
+    name: str
+    label: str
+    fetch: Callable[[], AgentResult]
+
+
+def _error_result(message: str) -> AgentResult:
+    return {"windows": [], "error": message}
+
+
+def fetch_claude() -> AgentResult:
+    """Keychain の OAuth トークンで Claude の利用率を取得する。"""
+    try:
+        proc = subprocess.run(
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if proc.returncode != 0:
+            return _error_result("Keychain から認証情報を取得できませんでした")
+        oauth = json.loads(proc.stdout).get("claudeAiOauth", {})
+        token = oauth.get("accessToken")
+        if not token:
+            return _error_result("accessToken が見つかりません")
+        expires_at = oauth.get("expiresAt")
+        if expires_at and expires_at / 1000 < time.time():
+            return _error_result("トークン期限切れ。claude を起動して更新してください")
+        req = urllib.request.Request(
+            CLAUDE_USAGE_URL,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "anthropic-beta": "oauth-2025-04-20",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as res:
+            data = json.loads(res.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return _error_result("認証エラー(401)。claude を起動してトークンを更新してください")
+        return _error_result(f"API エラー (HTTP {e.code})")
+    except Exception as e:
+        return _error_result(f"取得失敗: {e}")
+
+    windows: list[WindowResult] = []
+    for key, label in (("five_hour", "5h"), ("seven_day", "week")):
+        w = data.get(key)
+        if w:
+            windows.append(
+                {"label": label, "pct": w.get("utilization"), "resets_at": w.get("resets_at")}
+            )
+    return {"windows": windows, "error": None}
+
+
+def fetch_codex() -> AgentResult:
+    """codex app-server に JSON-RPC で問い合わせて利用率を取得する。
+
+    stdin を閉じるとサーバーが応答前に終了するため、initialize の応答を
+    確認してからリクエストを送り、応答を読み終えるまでパイプを開いたままにする。
+    """
+    init_req = {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "clientInfo": {
+                "name": "agent-usage",
+                "title": "agent-usage",
+                "version": "0.1.0",
+            }
+        },
+    }
+    limits_req = {"id": 2, "method": "account/rateLimits/read", "params": {}}
+
+    try:
+        proc = subprocess.Popen(
+            ["codex", "app-server"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except FileNotFoundError:
+        return _error_result("codex コマンドが見つかりません")
+
+    if proc.stdin is None or proc.stdout is None:
+        proc.kill()
+        return _error_result("codex app-server のパイプを開けませんでした")
+
+    result = _error_result("応答がありません（タイムアウト）")
+    watchdog = Timer(CODEX_TIMEOUT_SECONDS, proc.kill)
+    watchdog.start()
+    try:
+        proc.stdin.write(json.dumps(init_req) + "\n")
+        proc.stdin.flush()
+        for line in proc.stdout:
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("id") == 1:
+                proc.stdin.write(json.dumps(limits_req) + "\n")
+                proc.stdin.flush()
+            elif msg.get("id") == 2:
+                if "result" in msg:
+                    limits = msg["result"]["rateLimits"]
+                    windows: list[WindowResult] = []
+                    for key, label in (("primary", "5h"), ("secondary", "week")):
+                        w = limits.get(key)
+                        if w:
+                            windows.append(
+                                {
+                                    "label": label,
+                                    "pct": w.get("usedPercent"),
+                                    "resets_at": w.get("resetsAt"),
+                                }
+                            )
+                    result = {"windows": windows, "error": None}
+                else:
+                    message = msg.get("error", {}).get("message", "不明")
+                    result = _error_result(f"JSON-RPC エラー: {message}")
+                break
+    except Exception as e:
+        result = _error_result(f"取得失敗: {e}")
+    finally:
+        watchdog.cancel()
+        proc.kill()
+        proc.wait()
+    return result
+
+
+AGENT_REGISTRY: list[AgentSpec] = [
+    {"name": "claude", "label": "Claude", "fetch": fetch_claude},
+    {"name": "codex", "label": "Codex", "fetch": fetch_codex},
+]
+
+
+def load_enabled_agents() -> tuple[list[AgentSpec], list[str]]:
+    """config.json を読み、有効なエージェントの仕様と警告メッセージを返す。"""
+    warnings: list[str] = []
+    agents_conf: dict = {}
+    if CONFIG_PATH.exists():
+        try:
+            agents_conf = json.loads(CONFIG_PATH.read_text()).get("agents", {})
+        except (json.JSONDecodeError, OSError) as e:
+            warnings.append(f"config.json を読めません（全エージェント有効で続行）: {e}")
+    known_names = {spec["name"] for spec in AGENT_REGISTRY}
+    for name in agents_conf:
+        if name not in known_names:
+            warnings.append(f"config.json の未登録エージェント '{name}' を無視しました")
+    enabled = [
+        spec
+        for spec in AGENT_REGISTRY
+        if agents_conf.get(spec["name"], {}).get("enabled", True)
+    ]
+    return enabled, warnings
+
+
+def fetch_state(specs: list[AgentSpec]) -> dict:
+    """有効なエージェントを並行取得して state.json に書き込む。"""
+    results: dict[str, AgentResult] = {}
+
+    def run(spec: AgentSpec) -> None:
+        results[spec["name"]] = spec["fetch"]()
+
+    threads = [Thread(target=run, args=(spec,)) for spec in specs]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    state = {"fetched_at": int(time.time()), "agents": results}
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+    return state
+
+
+def load_or_fetch(specs: list[AgentSpec]) -> tuple[dict, bool]:
+    """TTL内かつ有効エージェントが揃っていればキャッシュを返し、それ以外は再取得する。"""
+    if STATE_PATH.exists():
+        try:
+            state = json.loads(STATE_PATH.read_text())
+            cached_agents = state.get("agents", {})
+            fresh = time.time() - state.get("fetched_at", 0) < CACHE_TTL_SECONDS
+            complete = all(spec["name"] in cached_agents for spec in specs)
+            if fresh and complete:
+                return state, True
+        except (json.JSONDecodeError, OSError):
+            pass
+    return fetch_state(specs), False
+
+
+def color_for(pct: float) -> str:
+    if pct >= 80:
+        return RED
+    if pct >= 50:
+        return YELLOW
+    return GREEN
+
+
+def bar(pct: float) -> str:
+    filled = min(BAR_WIDTH, max(0, round(pct / 100 * BAR_WIDTH)))
+    return "█" * filled + "░" * (BAR_WIDTH - filled)
+
+
+def fmt_reset(resets_at: str | int | float | None) -> str:
+    if resets_at is None:
+        return ""
+    if isinstance(resets_at, (int, float)):
+        dt = datetime.fromtimestamp(resets_at).astimezone()
+    else:
+        dt = datetime.fromisoformat(resets_at).astimezone()
+    now = datetime.now().astimezone()
+    mins = int((dt - now).total_seconds() // 60)
+    if mins < 0:
+        rel = "リセット済み"
+    elif mins < 60 * 24:
+        rel = f"あと{mins // 60}h{mins % 60:02d}m"
+    else:
+        rel = f"あと{mins // 1440}d{(mins % 1440) // 60}h"
+    when = dt.strftime("%H:%M") if dt.date() == now.date() else dt.strftime("%m/%d %H:%M")
+    return f"リセット {when} ({rel})"
+
+
+def render_window(name: str, win: WindowResult) -> str:
+    head = f"{name:<7} {win['label']:<5}"
+    if win.get("pct") is None:
+        return f"{head} {DIM}データなし{RESET}"
+    pct = float(win["pct"])
+    color = color_for(pct)
+    reset_note = fmt_reset(win.get("resets_at"))
+    return f"{head} {color}[{bar(pct)}] {pct:3.0f}%{RESET}  {DIM}{reset_note}{RESET}"
+
+
+def draw(state: dict, specs: list[AgentSpec], from_cache: bool, warnings: list[str]) -> None:
+    if sys.stdout.isatty():
+        sys.stdout.write("\033[2J\033[H")
+    fetched = datetime.fromtimestamp(state["fetched_at"]).astimezone().strftime("%H:%M:%S")
+    cache_note = "（キャッシュ）" if from_cache else ""
+    print(f"{BOLD}Agent Usage{RESET}  {DIM}更新 {fetched}{cache_note}{RESET}")
+    print()
+    agents = state.get("agents", {})
+    for spec in specs:
+        result = agents.get(spec["name"])
+        if result is None:
+            print(f"{spec['label']:<7} {DIM}データなし{RESET}")
+        elif result.get("error"):
+            print(f"{spec['label']:<7} {RED}{result['error']}{RESET}")
+        else:
+            name = spec["label"]
+            for win in result.get("windows", []):
+                print(render_window(name, win))
+                name = ""
+    print()
+    print(f"{DIM}[r] 再取得  [q] 閉じる{RESET}")
+    for warning in warnings:
+        print(f"{YELLOW}{warning}{RESET}")
+    sys.stdout.flush()
+
+
+def read_key() -> str:
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        return sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def main() -> None:
+    specs, warnings = load_enabled_agents()
+    state, cached = load_or_fetch(specs)
+    draw(state, specs, cached, warnings)
+    if not sys.stdin.isatty():
+        return
+    while True:
+        try:
+            key = read_key()
+        except (termios.error, KeyboardInterrupt):
+            break
+        if key in ("q", "\x03"):
+            break
+        if key == "r":
+            state, cached = load_or_fetch(specs)
+            draw(state, specs, cached, warnings)
+
+
+if __name__ == "__main__":
+    main()
