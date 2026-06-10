@@ -49,6 +49,31 @@ echo 'brew "ripgrep"' >> Brewfile
 brew bundle
 ```
 
+## エージェント利用率の表示
+
+`agent-usage` は Claude Code と Codex のレート制限（5時間枠・週枠）の利用率を表示するビューアです。
+tmux では `Prefix + u` でポップアップ表示できます（`r` で再取得、`q` で閉じる）。
+
+起動時に Claude（Keychain の OAuth トークン経由の usage API）と Codex（`codex app-server` への JSON-RPC）から
+利用率を取得し、`~/.cache/agent-usage/state.json` を更新して表示します。デーモンは常駐せず、
+前回取得から55秒未満の場合はキャッシュを再利用します。
+
+### エージェントの有効/無効設定
+
+`~/.config/agent-usage/config.json`（任意）でエージェントごとに取得・表示を制御できます。
+ファイルがない場合、および記載のないエージェントはすべて有効です。
+
+```json
+{
+  "agents": {
+    "codex": {"enabled": false}
+  }
+}
+```
+
+`enabled: false` にしたエージェントは取得処理自体が実行されません。
+新しいエージェントの追加手順はスクリプト先頭の docstring を参照してください。
+
 ## SSH元クリップボードへのコピー
 
 SSH接続中は `clip` コマンドがOSC 52を使ってSSHクライアント側のクリップボードへコピーします。
