@@ -1,0 +1,38 @@
+# Example lazysql configuration.
+# Copy this file to config.toml and edit it locally:
+#
+#   cp ~/.config/lazysql/config.toml.example ~/.config/lazysql/config.toml
+#
+# The real config.toml is intentionally ignored by git because it may contain
+# database hosts, usernames, and passwords.
+
+[application]
+DefaultPageSize = 300
+DisableSidebar = false
+SidebarOverlay = false
+JSONViewerWordWrap = false
+EnterOpensJSONViewer = false
+
+# SQLite example
+#
+# [[database]]
+# Name = 'local-sqlite'
+# Provider = 'sqlite'
+# URL = 'file:/tmp/example.sqlite3?loc=auto'
+# ReadOnly = true
+
+# PostgreSQL example. Prefer environment variables for secrets.
+#
+# [[database]]
+# Name = 'local-postgres'
+# Provider = 'postgres'
+# URL = 'postgres://${env:DB_USER}:${env:DB_PASSWORD}@localhost:5432/app'
+# ReadOnly = true
+
+# MySQL example
+#
+# [[database]]
+# Name = 'local-mysql'
+# Provider = 'mysql'
+# URL = 'mysql://${env:DB_USER}:${env:DB_PASSWORD}@localhost:3306/app'
+# ReadOnly = true

@@ -39,6 +39,7 @@ brew bundle
 | nvim | `~/.config/nvim/` |
 | tmux | `~/.tmux.conf` |
 | bin | `~/.local/bin/` |
+| lazysql | `~/.config/lazysql/` |
 
 ### Brewfile へのパッケージ追加
 
@@ -48,6 +49,30 @@ brew bundle
 echo 'brew "ripgrep"' >> Brewfile
 brew bundle
 ```
+
+## ターミナル内SQLクライアント
+
+`lazysql` は MySQL / PostgreSQL / SQLite / MSSQL に対応したTUIデータベースクライアントです。
+tmux では `Prefix + q` でセッション維持型ポップアップとして起動します。
+
+接続設定は `~/.config/lazysql/config.toml` に保存されます。このリポジトリでは
+`lazysql/.config/lazysql/config.toml.example` だけを管理し、実際の `config.toml` は `.gitignore` で除外します。
+
+```bash
+cp ~/.config/lazysql/config.toml.example ~/.config/lazysql/config.toml
+$EDITOR ~/.config/lazysql/config.toml
+```
+
+パスワードなどの秘密情報は、`config.toml` に直書きせず `${env:VAR_NAME}` 形式で環境変数から参照してください。
+
+基本操作:
+- `n`: 接続を追加
+- `c` / `Enter`: 接続
+- `j` / `k`: 移動
+- `[` / `]`: テーブル表示タブの切り替え
+- `Ctrl+E`: SQLエディタを開く
+- `Ctrl+R`: SQLを実行
+- `?`: ヘルプ
 
 ## エージェント利用率の表示
 

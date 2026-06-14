@@ -8,5 +8,6 @@ stow --target="$HOME" zsh
 stow --target="$HOME" nvim
 stow --target="$HOME" tmux
 stow --target="$HOME" bin
+stow --target="$HOME" lazysql
 
 echo "Done!"
