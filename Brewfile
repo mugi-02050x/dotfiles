@@ -35,6 +35,7 @@ brew "ruff"
 brew "fzf"
 brew "jq"
 brew "lazysql"          # tmux <prefix>q
+brew "lazydocker"       # tmux <prefix>k
 brew "tree"
 brew "shellcheck"       # Claude Code の自動フォーマットフックが使用
 

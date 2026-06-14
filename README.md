@@ -74,6 +74,21 @@ $EDITOR ~/.config/lazysql/config.toml
 - `Ctrl+R`: SQLを実行
 - `?`: ヘルプ
 
+## ターミナル内 Docker クライアント
+
+`lazydocker` は Docker / Docker Compose のコンテナ・イメージ・ネットワーク・ボリュームを TUI で操作できるツールです。
+tmux では `Prefix + k` でセッション維持型ポップアップとして起動します。
+
+設定は `~/.config/jesseduffield/lazydocker/config.yml` に保存されますが、本リポジトリではデフォルト設定のままで運用するため管理しません。
+
+基本操作:
+- `j` / `k`: 移動
+- `[` / `]`: パネル切り替え
+- `Enter`: 詳細表示
+- `d`: 停止コンテナの削除
+- `r`: リスタート
+- `?`: ヘルプ
+
 ## エージェント利用率の表示
 
 `agent-usage` は Claude Code と Codex のレート制限（5時間枠・週枠）の利用率を表示するビューアです。
