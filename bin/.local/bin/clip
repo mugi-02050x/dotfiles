@@ -11,6 +11,15 @@ else
   cat >"$tmp"
 fi
 
+# tmux内でSSH変数が未設定の場合、tmuxのグローバル環境から取得する。
+if [ -n "${TMUX:-}" ] && [ -z "${SSH_CONNECTION:-}" ] && command -v tmux >/dev/null 2>&1; then
+  _val="$(tmux show-environment SSH_CONNECTION 2>/dev/null)" || true
+  case "$_val" in SSH_CONNECTION=*) export SSH_CONNECTION="${_val#SSH_CONNECTION=}" ;; esac
+  _val="$(tmux show-environment SSH_TTY 2>/dev/null)" || true
+  case "$_val" in SSH_TTY=*) export SSH_TTY="${_val#SSH_TTY=}" ;; esac
+  unset _val
+fi
+
 # ローカルのmacOS上では通常のpbcopyを使う。
 if [ -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ] && command -v pbcopy >/dev/null 2>&1; then
   pbcopy <"$tmp"

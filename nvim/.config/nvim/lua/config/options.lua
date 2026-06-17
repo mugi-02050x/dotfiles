@@ -7,7 +7,15 @@ vim.o.mouse = 'a'
 vim.o.showmode = false
 
 -- Sync clipboard between OS and Neovim.
-local use_ssh_clipboard = (vim.env.SSH_CONNECTION or vim.env.SSH_TTY) and vim.fn.executable('clip') == 1
+local function tmux_getenv(name)
+  if not vim.env.TMUX then return nil end
+  local out = vim.fn.system({ 'tmux', 'show-environment', name })
+  return out:match('^' .. name .. '=([^\n]*)')
+end
+
+local ssh_connection = vim.env.SSH_CONNECTION or tmux_getenv('SSH_CONNECTION')
+local ssh_tty = vim.env.SSH_TTY or tmux_getenv('SSH_TTY')
+local use_ssh_clipboard = (ssh_connection or ssh_tty) and vim.fn.executable('clip') == 1
 if use_ssh_clipboard then
   vim.g.ssh_clipboard_copy = true
   vim.g.clipboard = {
