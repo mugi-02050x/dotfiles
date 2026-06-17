@@ -12,7 +12,7 @@ else
 fi
 
 # ローカルのmacOS上では通常のpbcopyを使う。
-if [ -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ] && command -v pbcopy >/dev/null 2>&1; then
+if ! is-ssh && command -v pbcopy >/dev/null 2>&1; then
   pbcopy <"$tmp"
   exit 0
 fi
@@ -25,18 +25,19 @@ tmux_passthrough=0
 # 実SSH端末のTTYがtmux clientとして存在するならそちらを優先する。
 if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
   client_tty="$(tmux display-message -p '#{client_tty}' 2>/dev/null || true)"
+  ssh_tty="$(is-ssh --tty 2>/dev/null)" || true
   ssh_tty_attached=0
-  if [ -n "${SSH_TTY:-}" ] && [ -w "$SSH_TTY" ]; then
+  if [ -n "$ssh_tty" ] && [ -w "$ssh_tty" ]; then
     for tty in $(tmux list-clients -F '#{client_tty}' 2>/dev/null || true); do
-      if [ "$tty" = "$SSH_TTY" ]; then
+      if [ "$tty" = "$ssh_tty" ]; then
         ssh_tty_attached=1
         break
       fi
     done
   fi
 
-  if [ "$ssh_tty_attached" -eq 1 ] && [ "$client_tty" != "$SSH_TTY" ]; then
-    output="$SSH_TTY"
+  if [ "$ssh_tty_attached" -eq 1 ] && [ "$client_tty" != "$ssh_tty" ]; then
+    output="$ssh_tty"
   elif [ -n "$client_tty" ] && [ -w "$client_tty" ]; then
     output="$client_tty"
   else

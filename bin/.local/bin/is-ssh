@@ -1,0 +1,25 @@
+#!/bin/sh
+#   引数なし: SSH経由なら終了コード0、それ以外は1
+#   --tty:    SSH_TTYの値を標準出力に出力（見つからなければ何も出力せず終了コード1）
+set -eu
+
+_tmux_getenv() {
+  [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1 || return 1
+  val="$(tmux show-environment "$1" 2>/dev/null)" || return 1
+  case "$val" in "$1"=*) echo "${val#*=}"; return 0 ;; esac
+  return 1
+}
+
+case "${1:-}" in
+  --tty)
+    if [ -n "${SSH_TTY:-}" ]; then echo "$SSH_TTY"; exit 0; fi
+    _tmux_getenv SSH_TTY && exit 0
+    exit 1
+    ;;
+  *)
+    [ -n "${SSH_CONNECTION:-}${SSH_TTY:-}" ] && exit 0
+    _tmux_getenv SSH_CONNECTION >/dev/null && exit 0
+    _tmux_getenv SSH_TTY >/dev/null && exit 0
+    exit 1
+    ;;
+esac

@@ -7,7 +7,9 @@ vim.o.mouse = 'a'
 vim.o.showmode = false
 
 -- Sync clipboard between OS and Neovim.
-local use_ssh_clipboard = (vim.env.SSH_CONNECTION or vim.env.SSH_TTY) and vim.fn.executable('clip') == 1
+local use_ssh_clipboard = vim.fn.executable('is-ssh') == 1
+  and os.execute('is-ssh') == 0
+  and vim.fn.executable('clip') == 1
 if use_ssh_clipboard then
   vim.g.ssh_clipboard_copy = true
   vim.g.clipboard = {
