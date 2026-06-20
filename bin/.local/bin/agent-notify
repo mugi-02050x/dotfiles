@@ -110,7 +110,14 @@ if [ -z "$NOTIFIER" ]; then
   exit 0
 fi
 
-set -- -title "$title" -subtitle "$state" -message "$message" -group "$group" -sound Glass
+# 承認待ちは Glass（現状維持）、それ以外は Pop。
+if [ "$state" = "承認待ち" ]; then
+  sound=Glass
+else
+  sound=Pop
+fi
+
+set -- -title "$title" -subtitle "$state" -message "$message" -group "$group" -sound "$sound"
 
 # tmux 内ならクリックで該当ペインへ復帰、tmux 外なら iTerm 前面化のみ。
 # 注: terminal-notifier は -execute と -activate を併用すると -execute のみ実行する。
