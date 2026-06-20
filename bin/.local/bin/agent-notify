@@ -9,6 +9,8 @@
 #   agent-notify codex-notification    # Codex PermissionRequest フック（stdin に JSON）
 #   agent-notify codex '<json>'        # 旧 Codex notify（argv に JSON、後方互換用）
 #
+# codex exec（非対話実行）から呼ばれた Codex フックは通知しない。
+#
 # title    = "<agent> ▸ <cwd の basename>"
 # subtitle = 状態（ターン完了 / 承認待ち / 入力待ち）
 # message  = 本文プレビュー
@@ -52,10 +54,41 @@ resolve_pane_via_pid() {
   return 1
 }
 
+# 自プロセスの親を辿り、非対話実行の `codex exec` から起動されたか判定する。
+# Codex のフック入力には CLI の実行モードが含まれないため、プロセスツリーを使う。
+is_codex_exec() {
+  _pid=$$
+  _i=0
+  while [ "${_pid:-0}" -gt 1 ] && [ "$_i" -lt 30 ]; do
+    _command="$(ps -o command= -p "$_pid" 2>/dev/null || true)"
+    # 親シェルの引数やプロンプト本文にある `codex exec` は誤検出しない。
+    set -- $_command
+    _executable="${1##*/}"
+    if [ "$_executable" = codex ] && [ "${2:-}" = exec ]; then
+      return 0
+    fi
+    case "$_executable:${2##*/}:${3:-}" in
+      sh:codex:exec|bash:codex:exec|zsh:codex:exec|node:codex.js:exec) return 0 ;;
+    esac
+    _pid="$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' ')"
+    _i=$((_i + 1))
+  done
+  return 1
+}
+
 # --- SSH 経由ではローカル GUI が無いため通知しない（issue #35: SSH 経路は未対応） ---
 if [ -x "$SELF_DIR/is-ssh" ] && "$SELF_DIR/is-ssh" 2>/dev/null; then
   finish 0
 fi
+
+# codex exec は自動処理向けなので、完了・承認待ちともデスクトップ通知しない。
+case "$mode" in
+  codex-stop|codex-notification|codex)
+    if is_codex_exec; then
+      finish 0
+    fi
+    ;;
+esac
 
 agent=
 state=
