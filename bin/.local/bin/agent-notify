@@ -1,0 +1,125 @@
+#!/bin/sh
+# AI エージェント（Claude/Codex）のターン完了・承認待ちをデスクトップ通知する。
+# terminal-notifier で通知し、クリックで tmux の該当ペインへ復帰する（agent-focus-pane）。
+#
+# 使い方:
+#   agent-notify claude-stop          # Claude Code Stop フック（stdin に JSON）
+#   agent-notify claude-notification  # Claude Code Notification フック（stdin に JSON）
+#   agent-notify codex '<json>'       # Codex notify（argv に JSON）
+#
+# title    = "<agent> ▸ <cwd の basename>"
+# subtitle = 状態（ターン完了 / 承認待ち / 入力待ち）
+# message  = 本文プレビュー
+# group    = "<agent>-<TMUX_PANE>" で連続通知を最新 1 件に集約
+set -eu
+
+SELF_DIR="$(unset CDPATH; cd "$(dirname "$0")" && pwd)"
+
+TMUX_BIN=/opt/homebrew/bin/tmux
+[ -x "$TMUX_BIN" ] || TMUX_BIN="$(command -v tmux 2>/dev/null || true)"
+
+# Neovim の :terminal 等で TMUX_PANE が継承されない場合に、自プロセスの親を辿って
+# tmux の pane_pid と一致するペインを特定する。tmux 外なら見つからず失敗する。
+resolve_pane_via_pid() {
+  [ -n "$TMUX_BIN" ] || return 1
+  _panes="$("$TMUX_BIN" list-panes -a -F '#{pane_pid} #{pane_id}' 2>/dev/null)" || return 1
+  [ -n "$_panes" ] || return 1
+  _pid=$$
+  _i=0
+  while [ "${_pid:-0}" -gt 1 ] && [ "$_i" -lt 30 ]; do
+    _m="$(printf '%s\n' "$_panes" | awk -v p="$_pid" '$1==p{print $2; exit}')"
+    if [ -n "$_m" ]; then printf '%s' "$_m"; return 0; fi
+    _pid="$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' ')"
+    _i=$((_i + 1))
+  done
+  return 1
+}
+
+# --- SSH 経由ではローカル GUI が無いため通知しない（issue #35: SSH 経路は未対応） ---
+if [ -x "$SELF_DIR/is-ssh" ] && "$SELF_DIR/is-ssh" 2>/dev/null; then
+  exit 0
+fi
+
+mode="${1:-}"
+agent=
+state=
+message=
+cwd=
+
+case "$mode" in
+  claude-stop)
+    agent=claude
+    state="ターン完了"
+    payload="$(cat)"
+    cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
+    transcript="$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+    # 直近のアシスタント発話をプレビューに使う（best-effort）。
+    if [ -n "$transcript" ] && [ -f "$transcript" ]; then
+      message="$(tail -n 50 "$transcript" 2>/dev/null | jq -rs '
+        [ .[]
+          | select(.type == "assistant")
+          | .message.content[]?
+          | select(.type == "text")
+          | .text
+        ] | last // empty
+      ' 2>/dev/null || true)"
+    fi
+    ;;
+  claude-notification)
+    agent=claude
+    payload="$(cat)"
+    cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
+    message="$(printf '%s' "$payload" | jq -r '.message // empty' 2>/dev/null || true)"
+    # メッセージ内容から種別を推定する。
+    case "$message" in
+      *permission*|*approve*|*承認*) state="承認待ち" ;;
+      *) state="入力待ち" ;;
+    esac
+    ;;
+  codex)
+    agent=codex
+    state="ターン完了"
+    payload="${2:-}"
+    message="$(printf '%s' "$payload" | jq -r '.["last-assistant-message"] // empty' 2>/dev/null || true)"
+    cwd="$PWD"
+    ;;
+  *)
+    printf 'agent-notify: unknown mode: %s\n' "$mode" >&2
+    exit 2
+    ;;
+esac
+
+[ -n "$cwd" ] || cwd="$PWD"
+project="$(basename "$cwd")"
+[ -n "$message" ] || message="$state"
+
+# プレビューは改行を除き長すぎると見づらいため切り詰める。
+message="$(printf '%s' "$message" | tr '\n' ' ' | cut -c1-140)"
+
+# TMUX_PANE が環境に無い（Neovim の :terminal 等）場合は親プロセスから特定する。
+pane="${TMUX_PANE:-}"
+[ -n "$pane" ] || pane="$(resolve_pane_via_pid || true)"
+title="$agent ▸ $project"
+group="$agent-${pane:-nopane}"
+
+NOTIFIER="$(command -v terminal-notifier 2>/dev/null || true)"
+
+# terminal-notifier 未導入時のフォールバック: iTerm を前面化するのみ。
+if [ -z "$NOTIFIER" ]; then
+  open -a iTerm 2>/dev/null || true
+  exit 0
+fi
+
+set -- -title "$title" -subtitle "$state" -message "$message" -group "$group" -sound Glass
+
+# tmux 内ならクリックで該当ペインへ復帰、tmux 外なら iTerm 前面化のみ。
+# 注: terminal-notifier は -execute と -activate を併用すると -execute のみ実行する。
+#     そのため tmux 内では -execute（agent-focus-pane）側で open -a により前面化し、
+#     tmux 外（-execute なし）では -activate で前面化する。
+if [ -n "$pane" ]; then
+  set -- "$@" -execute "/bin/sh $SELF_DIR/agent-focus-pane $pane"
+else
+  set -- "$@" -activate com.googlecode.iterm2
+fi
+
+"$NOTIFIER" "$@"

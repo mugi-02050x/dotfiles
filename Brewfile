@@ -40,6 +40,7 @@ brew "tree"
 brew "shellcheck"       # Claude Code の自動フォーマットフックが使用
 
 # --- macOS 専用（cask は Homebrew 上で macOS 限定。Linux では別途 apt 等で導入する） ---
+brew "terminal-notifier"              # AIエージェントのターン完了デスクトップ通知（agent-notify）
 cask "docker-desktop"                 # tmux でアプリ完結（旧 cask "docker" は非推奨）
 cask "claude-code"                    # tmux <prefix>a
 cask "font-jetbrains-mono-nerd-font"  # 接続元ターミナルのフォント（Ubuntu Server へも反映）

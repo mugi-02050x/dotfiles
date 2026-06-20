@@ -114,6 +114,56 @@ tmux では `Prefix + u` でポップアップ表示できます（`r` で再取
 `enabled: false` にしたエージェントは取得処理自体が実行されません。
 新しいエージェントの追加手順はスクリプト先頭の docstring を参照してください。
 
+## AIエージェントのターン完了通知
+
+`agent-notify` は Claude Code / Codex のターン完了・承認待ちを `terminal-notifier` でデスクトップ通知します。
+複数セッションを並行で動かしてもプロジェクト名で見分けられ、通知をクリックすると該当の tmux ペインへ復帰します。
+
+- タイトルに `<agent> ▸ <cwd の basename>`、サブタイトルに状態（ターン完了 / 承認待ち / 入力待ち）、本文に発話プレビュー
+- `-group "<agent>-<TMUX_PANE>"` で連続通知を最新 1 件に集約
+- クリック時は terminal-notifier の `-activate` で iTerm を前面化し、`-execute` で `agent-focus-pane` を呼んで該当ペインへ復帰
+
+クリック復帰（`agent-focus-pane`）はペインの所属セッションで挙動を分けます。
+
+- 通常のウィンドウ/ペイン: `switch-client` / `select-window` / `select-pane` で移動
+- セッション維持型ポップアップ（`prefix + a` 等で起動した `<agent>-<hash>` セッション）: メインクライアントを直接アタッチさせると（`switch-client`）デタッチ時に tmux を抜けてしまうため行わず、ポップアップが閉じていればメインクライアント上で `display-popup` を開き直す。デタッチすると元のセッションへ戻る
+
+前提として `terminal-notifier`（Brewfile に記載）が必要です。未導入時や tmux 外では iTerm の前面化のみにフォールバックします。
+
+### Claude Code
+
+`~/.claude/settings.json` の `hooks` で Stop / Notification から呼びます。
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-notify claude-stop" }
+      ] }
+    ],
+    "Notification": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-notify claude-notification" }
+      ] }
+    ]
+  }
+}
+```
+
+### Codex
+
+`~/.codex/config.toml` の `notify` で呼びます（Codex は JSON を末尾の引数として渡します）。
+
+```toml
+notify = ["/Users/<user>/.local/bin/agent-notify", "codex"]
+```
+
+`notify` はプログラムを 1 つしか指定できないため、他の notify 連携（Computer Use 等）とは併用できません。
+
+> **SSH 接続時は未対応**: リモート側に GUI が無いため、`agent-notify` は SSH 検出時（`is-ssh`）に何もしません。
+> リモートからローカル macOS へ通知を届ける経路は今後の検討事項です。
+
 ## SSH元クリップボードへのコピー
 
 SSH接続中は `clip` コマンドがOSC 52を使ってSSHクライアント側のクリップボードへコピーします。
