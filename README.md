@@ -153,13 +153,28 @@ tmux では `Prefix + u` でポップアップ表示できます（`r` で再取
 
 ### Codex
 
-`~/.codex/config.toml` の `notify` で呼びます（Codex は JSON を末尾の引数として渡します）。
+`~/.codex/hooks.json` の `PermissionRequest` / `Stop` フックで呼びます。
+承認待ちとターン完了を別イベントとして受け取るため、状態ごとに通知音を切り替えられます。
 
-```toml
-notify = ["/Users/<user>/.local/bin/agent-notify", "codex"]
+```json
+{
+  "hooks": {
+    "PermissionRequest": [
+      { "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-notify codex-notification" }
+      ] }
+    ],
+    "Stop": [
+      { "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-notify codex-stop" }
+      ] }
+    ]
+  }
+}
 ```
 
-`notify` はプログラムを 1 つしか指定できないため、他の notify 連携（Computer Use 等）とは併用できません。
+設定後は Codex を再起動し、`/hooks` で追加したフックを確認・信頼してください。
+同じイベントに複数のフックを設定できるため、読み上げなどの既存フックとも併用できます。
 
 > **SSH 接続時は未対応**: リモート側に GUI が無いため、`agent-notify` は SSH 検出時（`is-ssh`）に何もしません。
 > リモートからローカル macOS へ通知を届ける経路は今後の検討事項です。

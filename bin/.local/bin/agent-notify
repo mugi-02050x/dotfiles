@@ -5,7 +5,9 @@
 # 使い方:
 #   agent-notify claude-stop          # Claude Code Stop フック（stdin に JSON）
 #   agent-notify claude-notification  # Claude Code Notification フック（stdin に JSON）
-#   agent-notify codex '<json>'       # Codex notify（argv に JSON）
+#   agent-notify codex-stop            # Codex Stop フック（stdin に JSON）
+#   agent-notify codex-notification    # Codex PermissionRequest フック（stdin に JSON）
+#   agent-notify codex '<json>'        # 旧 Codex notify（argv に JSON、後方互換用）
 #
 # title    = "<agent> ▸ <cwd の basename>"
 # subtitle = 状態（ターン完了 / 承認待ち / 入力待ち）
@@ -14,6 +16,21 @@
 set -eu
 
 SELF_DIR="$(unset CDPATH; cd "$(dirname "$0")" && pwd)"
+mode="${1:-}"
+
+# Codex の command hook は stdout の JSON を応答として扱う。通知コマンド自身は
+# Codex の動作を変更しないため、空の JSON オブジェクトを返す。
+hook_response=0
+case "$mode" in
+  codex-stop|codex-notification) hook_response=1 ;;
+esac
+
+finish() {
+  if [ "$hook_response" -eq 1 ]; then
+    printf '{}\n'
+  fi
+  exit "${1:-0}"
+}
 
 TMUX_BIN=/opt/homebrew/bin/tmux
 [ -x "$TMUX_BIN" ] || TMUX_BIN="$(command -v tmux 2>/dev/null || true)"
@@ -37,10 +54,9 @@ resolve_pane_via_pid() {
 
 # --- SSH 経由ではローカル GUI が無いため通知しない（issue #35: SSH 経路は未対応） ---
 if [ -x "$SELF_DIR/is-ssh" ] && "$SELF_DIR/is-ssh" 2>/dev/null; then
-  exit 0
+  finish 0
 fi
 
-mode="${1:-}"
 agent=
 state=
 message=
@@ -76,6 +92,23 @@ case "$mode" in
       *) state="入力待ち" ;;
     esac
     ;;
+  codex-stop)
+    agent=codex
+    state="ターン完了"
+    payload="$(cat)"
+    message="$(printf '%s' "$payload" | jq -r '.last_assistant_message // empty' 2>/dev/null || true)"
+    cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
+    ;;
+  codex-notification)
+    agent=codex
+    state="承認待ち"
+    payload="$(cat)"
+    cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
+    message="$(printf '%s' "$payload" | jq -r '
+      .reason // .message //
+      (if .tool_name then "承認が必要です: " + .tool_name else empty end)
+    ' 2>/dev/null || true)"
+    ;;
   codex)
     agent=codex
     state="ターン完了"
@@ -107,7 +140,7 @@ NOTIFIER="$(command -v terminal-notifier 2>/dev/null || true)"
 # terminal-notifier 未導入時のフォールバック: iTerm を前面化するのみ。
 if [ -z "$NOTIFIER" ]; then
   open -a iTerm 2>/dev/null || true
-  exit 0
+  finish 0
 fi
 
 # 承認待ちは Glass（現状維持）、それ以外は Sosumi。
@@ -130,3 +163,4 @@ else
 fi
 
 "$NOTIFIER" "$@"
+finish 0
