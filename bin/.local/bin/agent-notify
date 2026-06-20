@@ -110,11 +110,11 @@ if [ -z "$NOTIFIER" ]; then
   exit 0
 fi
 
-# 承認待ちは Glass（現状維持）、それ以外は Pop。
+# 承認待ちは Glass（現状維持）、それ以外は Sosumi。
 if [ "$state" = "承認待ち" ]; then
   sound=Glass
 else
-  sound=Pop
+  sound=Sosumi
 fi
 
 set -- -title "$title" -subtitle "$state" -message "$message" -group "$group" -sound "$sound"
