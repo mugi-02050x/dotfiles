@@ -195,5 +195,8 @@ else
   set -- "$@" -activate com.googlecode.iterm2
 fi
 
-"$NOTIFIER" "$@"
+# 通知プロセスの異常終了で Codex / Claude のフック自体を失敗させない。
+if ! "$NOTIFIER" "$@"; then
+  printf 'agent-notify: terminal-notifier failed\n' >&2
+fi
 finish 0
