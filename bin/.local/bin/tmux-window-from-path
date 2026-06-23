@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -eu
+
+# ポップアップでパスを入力（Tab でファイル名補完、~ 展開対応）
+read -e -p "path: " input
+
+# パス未指定なら通常の new-window を実行
+if [ -z "$input" ]; then
+  tmux new-window
+  exit 0
+fi
+
+# ~ や環境変数を展開
+path=$(eval echo "$input")
+
+if [ ! -d "$path" ]; then
+  echo "no such directory: $path"
+  sleep 1.5
+  exit 1
+fi
+
+# カレントディレクトリ指定用に絶対パス化（ウィンドウ名には使わない）
+abs=$(cd "$path" && pwd)
+
+# ウィンドウ名: git リポジトリ配下ならリポジトリ名、そうでなければディレクトリ名
+if root=$(git -C "$abs" rev-parse --show-toplevel 2>/dev/null); then
+  name=$(basename "$root")
+else
+  name=$(basename "$abs")
+fi
+
+tmux new-window -c "$abs" -n "$name"
