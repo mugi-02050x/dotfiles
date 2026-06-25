@@ -32,6 +32,26 @@ session_has_client() {
   [ -n "$("$TMUX_BIN" list-clients -t "$1" -F '#{client_name}' 2>/dev/null)" ]
 }
 
+# 指定パスと一致する非ポップアップウィンドウ（＝ポップアップの起動元）を
+# "session_name|window_id" で返す。パスのハッシュ照合は agent-notify / tmux.conf と同一式。
+find_origin_window() {
+  _p="$1"
+  [ -n "$_p" ] || return 1
+  _t="$(printf '%s\n' "$_p" | md5sum | cut -c1-8)"
+  "$TMUX_BIN" list-panes -a -F '#{pane_active}|#{session_name}|#{window_id}|#{pane_current_path}' 2>/dev/null \
+  | while IFS='|' read -r _a _s _w _path; do
+      [ "$_a" = 1 ] || continue
+      is_popup_session "$_s" && continue
+      _ch="$(printf '%s\n' "$_path" | md5sum | cut -c1-8)"
+      [ "$_ch" = "$_t" ] || continue
+      # 名前が自パスのハッシュで終わるセッションはポップアップ型（<tool>-<hash>）。
+      # @popup 未設定の旧セッションも構造的に除外する。
+      case "$_s" in *-"$_ch") continue ;; esac
+      printf '%s|%s' "$_s" "$_w"
+      break
+    done
+}
+
 # iTerm を先に前面化する。osascript の activate は背景プロセス（terminal-notifier の
 # -execute 経由）からだと macOS のフォーカス奪取抑止で前面化せず（exit 0 でも無効）、
 # LaunchServices 経由の open -a なら確実に前面化する。
@@ -52,12 +72,21 @@ if [ -n "$TMUX_BIN" ]; then
     : # ペインが既に無い等で解決できない場合は前面化のみ。
   elif is_popup_session "$session"; then
     # ポップアップセッションは display-popup 経由で表示する設計。
-    # switch-client でメインクライアントを直接アタッチさせると、デタッチ時に
-    # 元セッションへ戻れず tmux を抜けてしまうため行わない。
-    if ! session_has_client "$session"; then
+    # ポップアップのアタッチ先（ポップアップセッション）へ switch-client すると、
+    # デタッチ時に元セッションへ戻れず tmux を抜けてしまうため行わない。
+    main_client="$(find_main_client || true)"
+    if [ -n "$main_client" ]; then
+      # ポップアップは起動元ウィンドウに重なるオーバーレイなので、メインクライアントを
+      # 起動元ウィンドウへ切り替えてカレント化し、agent-notify が付けたベルマークを消灯させる。
+      # ($PANE のカレントパス = エージェントの cwd = 起動元パス でハッシュ照合する。)
+      origin_path="$("$TMUX_BIN" display-message -p -t "$PANE" '#{pane_current_path}' 2>/dev/null || true)"
+      origin="$(find_origin_window "$origin_path" || true)"
+      if [ -n "$origin" ]; then
+        "$TMUX_BIN" switch-client -c "$main_client" -t "${origin%%|*}" 2>/dev/null || true
+        "$TMUX_BIN" select-window -t "${origin##*|}" 2>/dev/null || true
+      fi
       # ポップアップが閉じている → メインクライアント上で開き直す。
-      main_client="$(find_main_client || true)"
-      if [ -n "$main_client" ]; then
+      if ! session_has_client "$session"; then
         "$TMUX_BIN" display-popup -c "$main_client" -w90% -h90% \
           -E "$TMUX_BIN attach-session -t \"$session\"" 2>/dev/null || true
       fi
