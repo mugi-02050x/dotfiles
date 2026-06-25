@@ -54,6 +54,46 @@ resolve_pane_via_pid() {
   return 1
 }
 
+# セッションがポップアップ起動か（@popup マーカー付き）を判定する。
+# tmux.conf のセッション維持型ポップアップは生成時に @popup=1 を設定する。
+is_popup_session() {
+  [ "$("$TMUX_BIN" show-options -t "$1" -qv @popup 2>/dev/null)" = 1 ]
+}
+
+# エージェント完了時、用事のある tmux ウィンドウへベルフラグを立てて目印を出す。
+#   - ポップアップ起動: ポップアップ名は <name>-<md5(pane_current_path)先頭8桁> で
+#     カレントパスから決定的に決まる。$cwd（=起動元パス）の同じハッシュと一致する
+#     非ポップアップウィンドウ（起動元）を探し、そのペイン tty へ BEL を送る。
+#   - 通常ウィンドウ: 起動元はエージェント自身のウィンドウなので $pane へ直接送る。
+# BEL を pts スレッドへ書くとマスター側の tmux が読み取りベルフラグを立てる。
+# 失敗は握りつぶし、通知フック自体は壊さない。
+mark_origin_window() {
+  [ -n "$TMUX_BIN" ] && [ -n "$pane" ] || return 0
+  _sess="$("$TMUX_BIN" display-message -p -t "$pane" '#{session_name}' 2>/dev/null || true)"
+  [ -n "$_sess" ] || return 0
+  if is_popup_session "$_sess"; then
+    # 起動元パスは popup ペインの tmux カレントパスから取得し、候補側（list-panes の
+    # pane_current_path）と同じ正規化（例: /tmp→/private/tmp）でハッシュ照合する。
+    _opath="$("$TMUX_BIN" display-message -p -t "$pane" '#{pane_current_path}' 2>/dev/null || true)"
+    [ -n "$_opath" ] || _opath="$cwd"
+    _target="$(printf '%s\n' "$_opath" | md5sum | cut -c1-8)"   # tmux.conf と同一式
+    "$TMUX_BIN" list-panes -a -F '#{pane_active}|#{session_name}|#{pane_tty}|#{pane_current_path}' 2>/dev/null \
+    | while IFS='|' read -r _active _s _tty _path; do
+        [ "$_active" = 1 ] || continue
+        is_popup_session "$_s" && continue
+        _ch="$(printf '%s\n' "$_path" | md5sum | cut -c1-8)"
+        [ "$_ch" = "$_target" ] || continue
+        # 名前が自パスのハッシュで終わるセッションはポップアップ型（@popup 未設定の旧
+        # セッションも含む）。起動元として誤検出しないよう構造的に除外する。
+        case "$_s" in *-"$_ch") continue ;; esac
+        printf '\a' > "$_tty" 2>/dev/null || true
+      done
+  else
+    _tty="$("$TMUX_BIN" display-message -p -t "$pane" '#{pane_tty}' 2>/dev/null || true)"
+    [ -n "$_tty" ] && printf '\a' > "$_tty" 2>/dev/null || true
+  fi
+}
+
 # 自プロセスの親を辿り、非対話実行の `codex exec` から起動されたか判定する。
 # Codex のフック入力には CLI の実行モードが含まれないため、プロセスツリーを使う。
 is_codex_exec() {
@@ -75,11 +115,6 @@ is_codex_exec() {
   done
   return 1
 }
-
-# --- SSH 経由ではローカル GUI が無いため通知しない（issue #35: SSH 経路は未対応） ---
-if [ -x "$SELF_DIR/is-ssh" ] && "$SELF_DIR/is-ssh" 2>/dev/null; then
-  finish 0
-fi
 
 # codex exec は自動処理向けなので、完了・承認待ちともデスクトップ通知しない。
 case "$mode" in
@@ -167,6 +202,16 @@ pane="${TMUX_PANE:-}"
 [ -n "$pane" ] || pane="$(resolve_pane_via_pid || true)"
 title="$agent ▸ $project"
 group="$agent-${pane:-nopane}"
+
+# 用事のある tmux ウィンドウへベルマークを付ける（terminal-notifier 未導入・SSH でも機能）。
+mark_origin_window
+
+# SSH 経由はローカル GUI が無いためデスクトップ通知（terminal-notifier / iTerm 前面化）は
+# 行わない。ただし上の mark_origin_window によるベルマーク付与はリモート tmux 内で完結する
+# ため SSH でも実行済み（issue #35）。
+if [ -x "$SELF_DIR/is-ssh" ] && "$SELF_DIR/is-ssh" 2>/dev/null; then
+  finish 0
+fi
 
 NOTIFIER="$(command -v terminal-notifier 2>/dev/null || true)"
 
