@@ -37,6 +37,9 @@ finish() {
 TMUX_BIN=/opt/homebrew/bin/tmux
 [ -x "$TMUX_BIN" ] || TMUX_BIN="$(command -v tmux 2>/dev/null || true)"
 
+# status line への一時通知（issue #55）を表示してから自動で消すまでの秒数。
+NOTIFY_TTL=10
+
 # Neovim の :terminal 等で TMUX_PANE が継承されない場合に、自プロセスの親を辿って
 # tmux の pane_pid と一致するペインを特定する。tmux 外なら見つからず失敗する。
 resolve_pane_via_pid() {
@@ -92,6 +95,55 @@ mark_origin_window() {
     _tty="$("$TMUX_BIN" display-message -p -t "$pane" '#{pane_tty}' 2>/dev/null || true)"
     [ -n "$_tty" ] && printf '\a' > "$_tty" 2>/dev/null || true
   fi
+}
+
+# 起動元 window の "#I:#W" を best-effort で返す（status line 表示用、issue #55）。
+# 判定は mark_origin_window と同じで、ポップアップ起動時は pane_current_path の
+# md5 先頭 8 桁で起動元の非ポップアップウィンドウを照合する。解決できなければ空。
+resolve_origin_window() {
+  [ -n "$TMUX_BIN" ] && [ -n "$pane" ] || return 0
+  _sess="$("$TMUX_BIN" display-message -p -t "$pane" '#{session_name}' 2>/dev/null || true)"
+  [ -n "$_sess" ] || return 0
+  if is_popup_session "$_sess"; then
+    _opath="$("$TMUX_BIN" display-message -p -t "$pane" '#{pane_current_path}' 2>/dev/null || true)"
+    [ -n "$_opath" ] || _opath="$cwd"
+    _target="$(printf '%s\n' "$_opath" | md5sum | cut -c1-8)"   # tmux.conf と同一式
+    "$TMUX_BIN" list-panes -a -F '#{pane_active}|#{session_name}|#{pane_current_path}|#{window_index}:#{window_name}' 2>/dev/null \
+    | while IFS='|' read -r _active _s _path _win; do
+        [ "$_active" = 1 ] || continue
+        is_popup_session "$_s" && continue
+        _ch="$(printf '%s\n' "$_path" | md5sum | cut -c1-8)"
+        [ "$_ch" = "$_target" ] || continue
+        case "$_s" in *-"$_ch") continue ;; esac   # ポップアップ型は起動元から除外
+        printf '%s' "$_win"
+        break
+      done
+  else
+    "$TMUX_BIN" display-message -p -t "$pane" '#{window_index}:#{window_name}' 2>/dev/null || true
+  fi
+}
+
+# status line 右側へ一時通知を出す（issue #55）。@agent_notify_text をセットし、
+# NOTIFY_TTL 秒後にクリアする。複数通知時はトークンで競合を避け最新 1 件だけ残す
+# （後から来た通知が token を上書きし、古い sleep ジョブは不一致で何もしない）。
+# status line は tmux サーバ側に出るため SSH 経由でも有効（mark_origin_window と同様）。
+# 注: #{@opt} の値は status-right で再展開されないため #/% のエスケープは不要。
+set_status_notify() {
+  [ -n "$TMUX_BIN" ] || return 0
+  _win="$(resolve_origin_window 2>/dev/null || true)"
+  _text="${_win:+$_win }$agent ▸ $project $state: $message"
+  # 改行・制御文字を空白へ畳み、機密混入対策で短く切り詰める。
+  _text="$(printf '%s' "$_text" | tr '\n\r\t' '   ' | cut -c1-80)"
+  _token="$$-$(date +%s 2>/dev/null || echo 0)"
+  "$TMUX_BIN" set -g @agent_notify_text "$_text" 2>/dev/null || return 0
+  "$TMUX_BIN" set -g @agent_notify_token "$_token" 2>/dev/null || true
+  "$TMUX_BIN" refresh-client -S 2>/dev/null || true
+  "$TMUX_BIN" run-shell -b "sleep $NOTIFY_TTL; \
+    if [ \"\$($TMUX_BIN show-options -gqv @agent_notify_token)\" = \"$_token\" ]; then \
+      $TMUX_BIN set -g @agent_notify_text ''; \
+      $TMUX_BIN set -g @agent_notify_token ''; \
+      $TMUX_BIN refresh-client -S; \
+    fi" 2>/dev/null || true
 }
 
 # 自プロセスの親を辿り、非対話実行の `codex exec` から起動されたか判定する。
@@ -205,6 +257,9 @@ group="$agent-${pane:-nopane}"
 
 # 用事のある tmux ウィンドウへベルマークを付ける（terminal-notifier 未導入・SSH でも機能）。
 mark_origin_window
+
+# status line 右側へ一時通知を出す（issue #55）。SSH でも tmux サーバ側で完結する。
+set_status_notify
 
 # SSH 経由はローカル GUI が無いためデスクトップ通知（terminal-notifier / iTerm 前面化）は
 # 行わない。ただし上の mark_origin_window によるベルマーク付与はリモート tmux 内で完結する
