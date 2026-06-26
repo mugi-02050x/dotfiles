@@ -38,7 +38,7 @@ brew bundle
 | zsh | `~/.zshrc` |
 | nvim | `~/.config/nvim/` |
 | tmux | `~/.tmux.conf` |
-| bin | `~/.local/bin/` |
+| bin | `~/.local/bin/`, `~/.local/lib/` |
 | lazysql | `~/.config/lazysql/` |
 
 ### Brewfile へのパッケージ追加
@@ -121,9 +121,9 @@ tmux では `Prefix + u` でポップアップ表示できます（`r` で再取
 
 - タイトルに `<agent> ▸ <cwd の basename>`、サブタイトルに状態（ターン完了 / 承認待ち / 入力待ち）、本文に発話プレビュー
 - `-group "<agent>-<TMUX_PANE>"` で連続通知を最新 1 件に集約
-- クリック時は terminal-notifier の `-activate` で iTerm を前面化し、`-execute` で `agent-focus-pane` を呼んで該当ペインへ復帰
+- クリック時は terminal-notifier の `-activate` で iTerm を前面化し、`-execute` で `tmux-focus-pane-hook` を呼んで該当ペインへ復帰
 
-クリック復帰（`agent-focus-pane`）はペインの所属セッションで挙動を分けます。
+クリック復帰（`tmux-focus-pane-hook`）はペインの所属セッションで挙動を分けます。
 
 - 通常のウィンドウ/ペイン: `switch-client` / `select-window` / `select-pane` で移動
 - セッション維持型ポップアップ（`prefix + a` 等で起動した `<agent>-<hash>` セッション）: メインクライアントを直接アタッチさせると（`switch-client`）デタッチ時に tmux を抜けてしまうため行わず、ポップアップが閉じていればメインクライアント上で `display-popup` を開き直す。デタッチすると元のセッションへ戻る
