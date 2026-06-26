@@ -40,6 +40,10 @@ TMUX_BIN=/opt/homebrew/bin/tmux
 # status line への一時通知（issue #55）を表示してから自動で消すまでの秒数。
 NOTIFY_TTL=10
 
+# 通知テキストの最大表示幅（カラム）。status-right-length(100) から日付ピルと
+# 通知装飾ぶんを差し引いた余裕に収め、日付・時刻が末尾切り詰めで消えるのを防ぐ。
+NOTIFY_WIDTH=70
+
 # Neovim の :terminal 等で TMUX_PANE が継承されない場合に、自プロセスの親を辿って
 # tmux の pane_pid と一致するペインを特定する。tmux 外なら見つからず失敗する。
 resolve_pane_via_pid() {
@@ -123,6 +127,40 @@ resolve_origin_window() {
   fi
 }
 
+# 文字列を表示幅（カラム）で切り詰める。日本語等の全角は 2 幅で数えるため、
+# 文字数ではなく幅で制限しないと status-right が溢れて日付が末尾切り詰めで消える。
+# 切り詰めが起きた場合のみ末尾に "..." を付ける（全体の表示幅は引数の上限内に収め、
+# 本文を (上限-3) 幅で切ってから "..." を足す）。収まる場合はそのまま返す。
+# perl 不在環境（一部の SSH 先など）では文字数での切り詰めにフォールバックする。
+clip_width() {
+  if command -v perl >/dev/null 2>&1; then
+    MAXW="$1" perl -CSAD -e '
+      my $max = $ENV{MAXW} || 70;
+      my $ell = "..."; my $elen = 3;
+      local $/; my $s = <STDIN>; $s //= "";
+      my @ch = split //, $s;
+      my $cw = sub { $_[0] =~ /\p{East_Asian_Width=Wide}|\p{East_Asian_Width=Fullwidth}/ ? 2 : 1 };
+      my $total = 0; $total += $cw->($_) for @ch;
+      if ($total <= $max) { print $s; exit; }
+      my $budget = $max - $elen; $budget = 0 if $budget < 0;
+      my ($w, $o) = (0, "");
+      for my $c (@ch) {
+        my $x = $cw->($c);
+        last if $w + $x > $budget;
+        $o .= $c; $w += $x;
+      }
+      print $o . $ell;
+    '
+  else
+    _s="$(cat)"
+    if [ "$(printf '%s' "$_s" | cut -c1-"$1")" = "$_s" ]; then
+      printf '%s' "$_s"
+    else
+      printf '%s...' "$(printf '%s' "$_s" | cut -c1-"$(( $1 - 3 ))")"
+    fi
+  fi
+}
+
 # status line 右側へ一時通知を出す（issue #55）。@agent_notify_text をセットし、
 # NOTIFY_TTL 秒後にクリアする。複数通知時はトークンで競合を避け最新 1 件だけ残す
 # （後から来た通知が token を上書きし、古い sleep ジョブは不一致で何もしない）。
@@ -132,8 +170,8 @@ set_status_notify() {
   [ -n "$TMUX_BIN" ] || return 0
   _win="$(resolve_origin_window 2>/dev/null || true)"
   _text="${_win:+$_win }$agent ▸ $project $state: $message"
-  # 改行・制御文字を空白へ畳み、機密混入対策で短く切り詰める。
-  _text="$(printf '%s' "$_text" | tr '\n\r\t' '   ' | cut -c1-80)"
+  # 改行・制御文字を空白へ畳み、表示幅で切り詰める（機密混入対策も兼ねる）。
+  _text="$(printf '%s' "$_text" | tr '\n\r\t' '   ' | clip_width "$NOTIFY_WIDTH")"
   _token="$$-$(date +%s 2>/dev/null || echo 0)"
   "$TMUX_BIN" set -g @agent_notify_text "$_text" 2>/dev/null || return 0
   "$TMUX_BIN" set -g @agent_notify_token "$_token" 2>/dev/null || true
