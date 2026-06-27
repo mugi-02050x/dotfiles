@@ -11,247 +11,58 @@
 #
 # codex exec（非対話実行）から呼ばれた Codex フックは通知しない。
 #
-# title    = "<agent> ▸ <cwd の basename>"
-# subtitle = 状態（ターン完了 / 承認待ち / 入力待ち）
-# message  = 本文プレビュー
-# group    = "<agent>-<TMUX_PANE>" で連続通知を最新 1 件に集約
 set -eu
 
 SELF_DIR="$(unset CDPATH; cd "$(dirname "$0")" && pwd)"
 LIB_DIR="$(unset CDPATH; cd "$SELF_DIR/../lib" && pwd)"
+. "$LIB_DIR/process.sh"
 . "$LIB_DIR/tmux.sh"
+. "$LIB_DIR/agent/event.sh"
+. "$LIB_DIR/agent/notifier.sh"
 
 mode="${1:-}"
 
-# Codex の command hook は stdout の JSON を応答として扱う。通知コマンド自身は
-# Codex の動作を変更しないため、空の JSON オブジェクトを返す。
-hook_response=0
-case "$mode" in
-  codex-stop|codex-notification) hook_response=1 ;;
-esac
+requires_stdout_response=0
+if agent_event_requires_stdout_response "$mode"; then
+  requires_stdout_response=1
+fi
 
 finish() {
-  if [ "$hook_response" -eq 1 ]; then
+  if [ "$requires_stdout_response" -eq 1 ]; then
     printf '{}\n'
   fi
   exit "${1:-0}"
 }
 
-# status line への一時通知（issue #55）を表示してから自動で消すまでの秒数。
-NOTIFY_TTL=10
-
-# 通知テキストの最大表示幅（カラム）。status-right-length(100) から日付ピルと
-# 通知装飾ぶんを差し引いた余裕に収め、日付・時刻が末尾切り詰めで消えるのを防ぐ。
-NOTIFY_WIDTH=70
-
-# 文字列を表示幅（カラム）で切り詰める。日本語等の全角は 2 幅で数えるため、
-# 文字数ではなく幅で制限しないと status-right が溢れて日付が末尾切り詰めで消える。
-# 切り詰めが起きた場合のみ末尾に "..." を付ける（全体の表示幅は引数の上限内に収め、
-# 本文を (上限-3) 幅で切ってから "..." を足す）。収まる場合はそのまま返す。
-# perl 不在環境（一部の SSH 先など）では文字数での切り詰めにフォールバックする。
-clip_width() {
-  if command -v perl >/dev/null 2>&1; then
-    MAXW="$1" perl -CSAD -e '
-      my $max = $ENV{MAXW} || 70;
-      my $ell = "..."; my $elen = 3;
-      local $/; my $s = <STDIN>; $s //= "";
-      my @ch = split //, $s;
-      my $cw = sub { $_[0] =~ /\p{East_Asian_Width=Wide}|\p{East_Asian_Width=Fullwidth}/ ? 2 : 1 };
-      my $total = 0; $total += $cw->($_) for @ch;
-      if ($total <= $max) { print $s; exit; }
-      my $budget = $max - $elen; $budget = 0 if $budget < 0;
-      my ($w, $o) = (0, "");
-      for my $c (@ch) {
-        my $x = $cw->($c);
-        last if $w + $x > $budget;
-        $o .= $c; $w += $x;
-      }
-      print $o . $ell;
-    '
-  else
-    _s="$(cat)"
-    if [ "$(printf '%s' "$_s" | cut -c1-"$1")" = "$_s" ]; then
-      printf '%s' "$_s"
-    else
-      printf '%s...' "$(printf '%s' "$_s" | cut -c1-"$(( $1 - 3 ))")"
-    fi
-  fi
-}
-
-# status line 右側へ一時通知を出す（issue #55）。@agent_notify_text をセットし、
-# NOTIFY_TTL 秒後にクリアする。複数通知時はトークンで競合を避け最新 1 件だけ残す
-# （後から来た通知が token を上書きし、古い sleep ジョブは不一致で何もしない）。
-# status line は tmux サーバ側に出るため SSH 経由でも有効（dot_tmux_send_bell_to_notification_target_window と同様）。
-# 注: #{@opt} の値は status-right で再展開されないため #/% のエスケープは不要。
-set_status_notify() {
-  _tmux="$(dot_tmux_find_executable)" || return 0
-  _win="$(dot_tmux_statusline_notification_target_label "$pane" "$cwd" 2>/dev/null || true)"
-  _text="${_win:+$_win }$agent ▸ $project $state: $message"
-  # 改行・制御文字を空白へ畳み、表示幅で切り詰める（機密混入対策も兼ねる）。
-  _text="$(printf '%s' "$_text" | tr '\n\r\t' '   ' | clip_width "$NOTIFY_WIDTH")"
-  _token="$$-$(date +%s 2>/dev/null || echo 0)"
-  "$_tmux" set -g @agent_notify_text "$_text" 2>/dev/null || return 0
-  "$_tmux" set -g @agent_notify_token "$_token" 2>/dev/null || true
-  "$_tmux" refresh-client -S 2>/dev/null || true
-  "$_tmux" run-shell -b "sleep $NOTIFY_TTL; \
-    if [ \"\$($_tmux show-options -gqv @agent_notify_token)\" = \"$_token\" ]; then \
-      $_tmux set -g @agent_notify_text ''; \
-      $_tmux set -g @agent_notify_token ''; \
-      $_tmux refresh-client -S; \
-    fi" 2>/dev/null || true
-}
-
-# 自プロセスの親を辿り、非対話実行の `codex exec` から起動されたか判定する。
-# Codex のフック入力には CLI の実行モードが含まれないため、プロセスツリーを使う。
-is_codex_exec() {
-  _pid=$$
-  _i=0
-  while [ "${_pid:-0}" -gt 1 ] && [ "$_i" -lt 30 ]; do
-    _command="$(ps -o command= -p "$_pid" 2>/dev/null || true)"
-    # 親シェルの引数やプロンプト本文にある `codex exec` は誤検出しない。
-    set -- $_command
-    _executable="${1##*/}"
-    if [ "$_executable" = codex ] && [ "${2:-}" = exec ]; then
-      return 0
-    fi
-    case "$_executable:${2##*/}:${3:-}" in
-      sh:codex:exec|bash:codex:exec|zsh:codex:exec|node:codex.js:exec) return 0 ;;
-    esac
-    _pid="$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' ')"
-    _i=$((_i + 1))
-  done
-  return 1
-}
-
 # codex exec は自動処理向けなので、完了・承認待ちともデスクトップ通知しない。
 case "$mode" in
   codex-stop|codex-notification|codex)
-    if is_codex_exec; then
+    if agent_event_is_codex_exec; then
       finish 0
     fi
     ;;
 esac
 
-agent=
-state=
-message=
-cwd=
-
-case "$mode" in
-  claude-stop)
-    agent=claude
-    state="ターン完了"
-    payload="$(cat)"
-    cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
-    transcript="$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
-    # 直近のアシスタント発話をプレビューに使う（best-effort）。
-    if [ -n "$transcript" ] && [ -f "$transcript" ]; then
-      message="$(tail -n 50 "$transcript" 2>/dev/null | jq -rs '
-        [ .[]
-          | select(.type == "assistant")
-          | .message.content[]?
-          | select(.type == "text")
-          | .text
-        ] | last // empty
-      ' 2>/dev/null || true)"
-    fi
-    ;;
-  claude-notification)
-    agent=claude
-    payload="$(cat)"
-    cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
-    message="$(printf '%s' "$payload" | jq -r '.message // empty' 2>/dev/null || true)"
-    # メッセージ内容から種別を推定する。
-    case "$message" in
-      *permission*|*approve*|*承認*) state="承認待ち" ;;
-      *) state="入力待ち" ;;
-    esac
-    ;;
-  codex-stop)
-    agent=codex
-    state="ターン完了"
-    payload="$(cat)"
-    message="$(printf '%s' "$payload" | jq -r '.last_assistant_message // empty' 2>/dev/null || true)"
-    cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
-    ;;
-  codex-notification)
-    agent=codex
-    state="承認待ち"
-    payload="$(cat)"
-    cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
-    message="$(printf '%s' "$payload" | jq -r '
-      .reason // .message //
-      (if .tool_name then "承認が必要です: " + .tool_name else empty end)
-    ' 2>/dev/null || true)"
-    ;;
-  codex)
-    agent=codex
-    state="ターン完了"
-    payload="${2:-}"
-    message="$(printf '%s' "$payload" | jq -r '.["last-assistant-message"] // empty' 2>/dev/null || true)"
-    cwd="$PWD"
-    ;;
-  *)
+agent_notify_rc=0
+agent_event_normalize "$mode" "${2:-}" || agent_notify_rc=$?
+if [ "$agent_notify_rc" -ne 0 ]; then
+  if [ "$agent_notify_rc" -eq 2 ]; then
     printf 'agent-notify: unknown mode: %s\n' "$mode" >&2
-    exit 2
-    ;;
-esac
+  fi
+  finish "$agent_notify_rc"
+fi
 
-[ -n "$cwd" ] || cwd="$PWD"
-project="$(basename "$cwd")"
-[ -n "$message" ] || message="$state"
-
-# プレビューは改行を除き長すぎると見づらいため切り詰める。
-message="$(printf '%s' "$message" | tr '\n' ' ' | cut -c1-140)"
+message="$(agent_notifier_message_preview "$AGENT_EVENT_MESSAGE")"
 
 # TMUX_PANE が環境に無い（Neovim の :terminal 等）場合は親プロセスから特定する。
 pane="${TMUX_PANE:-}"
 [ -n "$pane" ] || pane="$(dot_tmux_resolve_pane_via_pid || true)"
-title="$agent ▸ $project"
-group="$agent-${pane:-nopane}"
 
 # 用事のある tmux ウィンドウへベルマークを付ける（terminal-notifier 未導入・SSH でも機能）。
-dot_tmux_send_bell_to_notification_target_window "$pane" "$cwd"
+dot_tmux_send_bell_to_notification_target_window "$pane" "$AGENT_EVENT_CWD"
 
 # status line 右側へ一時通知を出す（issue #55）。SSH でも tmux サーバ側で完結する。
-set_status_notify
+agent_notifier_show_status_line "$pane" "$AGENT_EVENT_CWD" "$AGENT_EVENT_AGENT" "$AGENT_EVENT_STATE" "$message"
+agent_notifier_send_desktop "$SELF_DIR" "$pane" "$AGENT_EVENT_CWD" "$AGENT_EVENT_AGENT" "$AGENT_EVENT_STATE" "$message"
 
-# SSH 経由はローカル GUI が無いためデスクトップ通知（terminal-notifier / iTerm 前面化）は
-# 行わない。ただし上の dot_tmux_send_bell_to_notification_target_window によるベルマーク付与はリモート tmux 内で完結する
-# ため SSH でも実行済み（issue #35）。
-if [ -x "$SELF_DIR/is-ssh" ] && "$SELF_DIR/is-ssh" 2>/dev/null; then
-  finish 0
-fi
-
-NOTIFIER="$(command -v terminal-notifier 2>/dev/null || true)"
-
-# terminal-notifier 未導入時のフォールバック: iTerm を前面化するのみ。
-if [ -z "$NOTIFIER" ]; then
-  open -a iTerm 2>/dev/null || true
-  finish 0
-fi
-
-# 承認待ちは Glass（現状維持）、それ以外は Sosumi。
-if [ "$state" = "承認待ち" ]; then
-  sound=Glass
-else
-  sound=Sosumi
-fi
-
-set -- -title "$title" -subtitle "$state" -message "$message" -group "$group" -sound "$sound"
-
-# tmux 内ならクリックで該当ペインへ復帰、tmux 外なら iTerm 前面化のみ。
-# 注: terminal-notifier は -execute と -activate を併用すると -execute のみ実行する。
-#     そのため tmux 内では -execute（tmux-focus-pane-hook）側で open -a により前面化し、
-#     tmux 外（-execute なし）では -activate で前面化する。
-if [ -n "$pane" ]; then
-  set -- "$@" -execute "/bin/sh $SELF_DIR/tmux-focus-pane-hook $pane"
-else
-  set -- "$@" -activate com.googlecode.iterm2
-fi
-
-# 通知プロセスの異常終了で Codex / Claude のフック自体を失敗させない。
-if ! "$NOTIFIER" "$@"; then
-  printf 'agent-notify: terminal-notifier failed\n' >&2
-fi
 finish 0
