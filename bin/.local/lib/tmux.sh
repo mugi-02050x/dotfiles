@@ -3,6 +3,7 @@
 
 DOT_TMUX_LIB_DIR="${DOT_TMUX_LIB_DIR:-$HOME/.local/lib}"
 if ! command -v dot_process_list_ancestors >/dev/null 2>&1 && [ -f "$DOT_TMUX_LIB_DIR/process.sh" ]; then
+  # shellcheck source=/dev/null
   . "$DOT_TMUX_LIB_DIR/process.sh"
 fi
 
@@ -253,4 +254,25 @@ dot_tmux_focus_pane() {
       fi
     fi
   fi
+}
+
+# 指定 pane の所属セッションへ agent のライフサイクル状態を刻む。
+#   引数: <pane> <state: working|waiting|idle> [wait_reason: permission|question|input]
+# agent-session の一覧/picker が #{@agent_state} 等を読んで表示する。pane 未指定や
+# tmux 外・セッション解決不可なら no-op（フックから安全に呼べる）。@agent_state_at は
+# 経過時間表示用の epoch。wait_reason は state==waiting のときだけ意味を持つ（読む側で
+# ゲートするため、working/idle 遷移時のクリアは不要だが、stale を避けるため毎回上書きする）。
+dot_tmux_mark_agent_state() {
+  dot_tmux_pane="${1:-}"
+  dot_tmux_state="${2:-}"
+  dot_tmux_wait_reason="${3:-}"
+  [ -n "$dot_tmux_pane" ] && [ -n "$dot_tmux_state" ] || return 0
+
+  dot_tmux_tmux="$(dot_tmux_find_executable)" || return 0
+  dot_tmux_session="$("$dot_tmux_tmux" display-message -p -t "$dot_tmux_pane" '#{session_name}' 2>/dev/null || true)"
+  [ -n "$dot_tmux_session" ] || return 0
+
+  "$dot_tmux_tmux" set-option -t "$dot_tmux_session" @agent_state "$dot_tmux_state" 2>/dev/null || return 0
+  "$dot_tmux_tmux" set-option -t "$dot_tmux_session" @agent_state_at "$(date +%s 2>/dev/null || echo 0)" 2>/dev/null || true
+  "$dot_tmux_tmux" set-option -t "$dot_tmux_session" @agent_wait_reason "$dot_tmux_wait_reason" 2>/dev/null || true
 }

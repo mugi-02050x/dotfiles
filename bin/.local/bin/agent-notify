@@ -52,7 +52,24 @@ if [ "$agent_notify_rc" -ne 0 ]; then
   finish "$agent_notify_rc"
 fi
 
+# event.sh は state(working/waiting/idle)+wait_reason を返す。通知の subtitle は
+# agent-notify 独自の解釈として、ここで人間向けの日本語ラベルへ変換する
+# （notifier.sh は "承認待ち" で通知音を分岐するため、その文言は維持する）。
+case "$AGENT_EVENT_STATE" in
+  idle)    label="ターン完了" ;;
+  working) label="作業中" ;;
+  waiting)
+    case "$AGENT_EVENT_WAIT_REASON" in
+      permission) label="承認待ち" ;;
+      question)   label="確認待ち" ;;
+      *)          label="入力待ち" ;;
+    esac
+    ;;
+  *) label="$AGENT_EVENT_STATE" ;;
+esac
+
 message="$(agent_notifier_message_preview "$AGENT_EVENT_MESSAGE")"
+[ -n "$message" ] || message="$label"
 
 # TMUX_PANE が環境に無い（Neovim の :terminal 等）場合は親プロセスから特定する。
 pane="${TMUX_PANE:-}"
@@ -62,7 +79,7 @@ pane="${TMUX_PANE:-}"
 dot_tmux_send_bell_to_notification_target_window "$pane" "$AGENT_EVENT_CWD"
 
 # status line 右側へ一時通知を出す（issue #55）。SSH でも tmux サーバ側で完結する。
-agent_notifier_show_status_line "$pane" "$AGENT_EVENT_CWD" "$AGENT_EVENT_AGENT" "$AGENT_EVENT_STATE" "$message"
-agent_notifier_send_desktop "$SELF_DIR" "$pane" "$AGENT_EVENT_CWD" "$AGENT_EVENT_AGENT" "$AGENT_EVENT_STATE" "$message"
+agent_notifier_show_status_line "$pane" "$AGENT_EVENT_CWD" "$AGENT_EVENT_AGENT" "$label" "$message"
+agent_notifier_send_desktop "$SELF_DIR" "$pane" "$AGENT_EVENT_CWD" "$AGENT_EVENT_AGENT" "$label" "$message"
 
 finish 0
