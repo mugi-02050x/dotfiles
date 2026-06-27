@@ -1,6 +1,11 @@
 #!/bin/sh
 # Shared tmux helpers used by local scripts.
 
+DOT_TMUX_LIB_DIR="${DOT_TMUX_LIB_DIR:-$HOME/.local/lib}"
+if ! command -v dot_process_list_ancestors >/dev/null 2>&1 && [ -f "$DOT_TMUX_LIB_DIR/process.sh" ]; then
+  . "$DOT_TMUX_LIB_DIR/process.sh"
+fi
+
 DOT_TMUX_BIN="${DOT_TMUX_BIN:-}"
 DOT_TMUX_POPUP_WIDTH_PERCENT="${DOT_TMUX_POPUP_WIDTH_PERCENT:-90}"
 DOT_TMUX_POPUP_HEIGHT_PERCENT="${DOT_TMUX_POPUP_HEIGHT_PERCENT:-90}"
@@ -27,30 +32,33 @@ dot_tmux_popup_path_hash() {
   dot_tmux_path="${1:-}"
   if command -v md5sum >/dev/null 2>&1; then
     printf '%s\n' "$dot_tmux_path" | md5sum | cut -c1-8
-  else
+  elif command -v md5 >/dev/null 2>&1; then
     printf '%s\n' "$dot_tmux_path" | md5 -q | cut -c1-8
+  elif [ -x /sbin/md5 ]; then
+    printf '%s\n' "$dot_tmux_path" | /sbin/md5 -q | cut -c1-8
+  else
+    return 1
   fi
 }
 
 # Neovim の :terminal 等で TMUX_PANE が継承されない場合に、自プロセスの親を辿って
 # tmux の pane_pid と一致するペインを特定する。tmux 外なら見つからず失敗する。
 dot_tmux_resolve_pane_via_pid() {
+  command -v dot_process_list_ancestors >/dev/null 2>&1 || return 1
   dot_tmux_tmux="$(dot_tmux_find_executable)" || return 1
   dot_tmux_panes="$("$dot_tmux_tmux" list-panes -a -F '#{pane_pid} #{pane_id}' 2>/dev/null)" || return 1
   [ -n "$dot_tmux_panes" ] || return 1
 
-  dot_tmux_pid=$$
-  dot_tmux_i=0
-  while [ "${dot_tmux_pid:-0}" -gt 1 ] && [ "$dot_tmux_i" -lt 30 ]; do
+  dot_tmux_ancestors="$(dot_process_list_ancestors "$$" 30)"
+  printf '%s\n' "$dot_tmux_ancestors" | while IFS='|' read -r dot_tmux_pid _dot_tmux_command; do
+    [ -n "$dot_tmux_pid" ] || continue
     dot_tmux_match="$(printf '%s\n' "$dot_tmux_panes" | awk -v p="$dot_tmux_pid" '$1==p{print $2; exit}')"
     if [ -n "$dot_tmux_match" ]; then
       printf '%s' "$dot_tmux_match"
       return 0
     fi
-    dot_tmux_pid="$(ps -o ppid= -p "$dot_tmux_pid" 2>/dev/null | tr -d ' ')"
-    dot_tmux_i=$((dot_tmux_i + 1))
+    false
   done
-  return 1
 }
 
 # ポップアップ起動セッション（@popup マーカー付き）かどうかを判定する。
