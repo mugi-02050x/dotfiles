@@ -126,7 +126,7 @@ tmux では `Prefix + u` でポップアップ表示できます（`r` で再取
 クリック復帰（`tmux-focus-pane-hook`）はペインの所属セッションで挙動を分けます。
 
 - 通常のウィンドウ/ペイン: `switch-client` / `select-window` / `select-pane` で移動
-- セッション維持型ポップアップ（`prefix + a` 等で起動した `<agent>-<hash>` セッション）: メインクライアントを直接アタッチさせると（`switch-client`）デタッチ時に tmux を抜けてしまうため行わず、ポップアップが閉じていればメインクライアント上で `display-popup` を開き直す。デタッチすると元のセッションへ戻る
+- セッション維持型ポップアップ（`prefix + A` 等で起動した `<agent>-<hash>` セッション）: メインクライアントを直接アタッチさせると（`switch-client`）デタッチ時に tmux を抜けてしまうため行わず、ポップアップが閉じていればメインクライアント上で `display-popup` を開き直す。デタッチすると元のセッションへ戻る
 
 前提として `terminal-notifier`（Brewfile に記載）が必要です。未導入時や tmux 外では iTerm の前面化のみにフォールバックします。
 
@@ -180,6 +180,24 @@ tmux では `Prefix + u` でポップアップ表示できます（`r` で再取
 > **SSH 接続時のデスクトップ通知は未対応**: リモート側に GUI が無いため、`agent-notify` は SSH 検出時（`is-ssh`）にデスクトップ通知を行いません。
 > ただし tmux のベルマーク付与はリモートの tmux 内で完結するため、SSH でも該当ウィンドウの window-status に目印が付きます。
 > リモートからローカル macOS へデスクトップ通知を届ける経路は今後の検討事項です。
+
+## 稼働中エージェントの一覧（agent-session）
+
+`agent-session` は、いま動いている AI エージェント（Claude / Codex / Gemini）の popup セッションを一覧し、そこから復帰（jump）・終了（kill）できる fzf picker です。通知を見逃した・無効にした場合でも、一覧から復帰先を辿れます。通知の有効/無効に依存せず、tmux だけで単体動作します。
+
+`prefix + a`（list Agents）で picker をポップアップ表示します。
+
+| キー | 動作 |
+| --- | --- |
+| `enter` | 選択したセッションへ復帰（起動元ウィンドウへ移動してから popup を開き直す） |
+| `ctrl-x` ×2 | 選択したセッションを終了（1 回目で警告ヘッダを表示し、同じ行でもう一度押すと実行。別の行へ移ると取り消し） |
+| `↑` / `↓`・入力 | fzf の絞り込み |
+
+右ペインには `capture-pane` による各セッションのライブプレビューを表示します。テキストで一覧だけ取りたい場合は `agent-session list` を実行します。
+
+- **検知の仕組み**: セッション維持型ポップアップ（`prefix + A` / `o` / `G`）で起動した popup セッションには、`dot_tmux_open_persistent_popup_session` が種別マーカー `@agent`（`claude` / `codex` / `gemini`）を刻みます。picker はこの `@agent` 付きセッションを列挙します。エージェントを終了するとセッションも消えるため、tmux のセッション一覧がそのまま「稼働中エージェント」の一覧になります（プロセス走査や常駐は不要）。
+- **前提**: `fzf`（Brewfile に記載）。`prefix + a` から起動する都合上、`agent-session` に実行権限が必要です（`chmod +x ~/.local/bin/agent-session`）。
+- **既知の制約**: `@agent` マーカー追加より前から起動していたセッションは、起動し直すまで一覧に出ません。また現状は状態列を `?` 固定としており、稼働中/承認待ち/完了（working/waiting/idle）の表示は今後 Claude/Codex のフック対応で追加予定です。
 
 ## SSH元クリップボードへのコピー
 
