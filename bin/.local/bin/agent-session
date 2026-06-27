@@ -55,7 +55,7 @@ agent_session_record_state() {
 }
 
 # @agent マーカー付きセッションを rank 付きの生データとして出力する（color なし）。
-# 形式: rank<TAB>session<TAB>state<TAB>wait_reason<TAB>age_min<TAB>agent<TAB>project
+# 形式: rank<TAB>session<TAB>state<TAB>age_min<TAB>agent<TAB>project
 # rank は注意が必要な状態ほど小さく（waiting<idle<unknown<working）、同 rank 内は
 # 経過時間昇順（直近に状態が変わったものが上）。list / picker はこれを各々整形する。
 agent_session_emit_rows() {
@@ -64,9 +64,9 @@ agent_session_emit_rows() {
   agent_session_tab="$(printf '\t')"
 
   "$agent_session_tmux" list-sessions \
-    -F '#{session_name}|#{@agent}|#{@agent_state}|#{@agent_state_at}|#{@agent_wait_reason}|#{pane_current_path}' 2>/dev/null \
+    -F '#{session_name}|#{@agent}|#{@agent_state}|#{@agent_state_at}|#{pane_current_path}' 2>/dev/null \
   | while IFS='|' read -r agent_session_name agent_session_kind agent_session_state \
-      agent_session_at agent_session_reason agent_session_path; do
+      agent_session_at agent_session_path; do
       [ -n "$agent_session_kind" ] || continue
 
       case "$agent_session_state" in
@@ -88,26 +88,19 @@ agent_session_emit_rows() {
       agent_session_project="${agent_session_path##*/}"
       [ -n "$agent_session_project" ] || agent_session_project="$agent_session_name"
 
-      # state / wait_reason は空になり得る。空フィールドのままだと読み手の
+      # state は空になり得る（unknown）。空フィールドのままだと読み手の
       # `IFS=<TAB> read` がタブ(空白系IFS)を結合して列がズレるため、none で潰す。
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$agent_session_rank" "$agent_session_name" "${agent_session_state:-none}" \
-        "${agent_session_reason:-none}" "$agent_session_age" "$agent_session_kind" \
-        "$agent_session_project"
+        "$agent_session_age" "$agent_session_kind" "$agent_session_project"
     done \
-  | sort -t"$agent_session_tab" -k1,1n -k5,5n
+  | sort -t"$agent_session_tab" -k1,1n -k4,4n
 }
 
-# state(+wait_reason) を人間向けのプレーンラベルにする。
+# state を人間向けのプレーンラベルにする（wait_reason は一覧では出さない）。
 agent_session_state_label() {
   case "${1:-}" in
-    waiting)
-      case "${2:-}" in
-        permission) printf 'waiting:permission' ;;
-        question)   printf 'waiting:question' ;;
-        *)          printf 'waiting:input' ;;
-      esac
-      ;;
+    waiting) printf 'waiting' ;;
     idle)    printf 'idle' ;;
     working) printf 'working' ;;
     *)       printf '?' ;;
@@ -116,7 +109,7 @@ agent_session_state_label() {
 
 # state を ANSI 色付きの ● ラベルにする（picker 用）。
 agent_session_state_cell() {
-  agent_session_cell_label="$(agent_session_state_label "${1:-}" "${2:-}")"
+  agent_session_cell_label="$(agent_session_state_label "${1:-}")"
   case "${1:-}" in
     waiting) printf '\033[33m●\033[0m %s' "$agent_session_cell_label" ;;  # yellow: 要対応
     idle)    printf '\033[32m●\033[0m %s' "$agent_session_cell_label" ;;  # green : 完了・あなたの番
@@ -132,8 +125,8 @@ agent_session_picker_rows() {
   agent_session_tab="$(printf '\t')"
   agent_session_emit_rows | while IFS="$agent_session_tab" \
     read -r agent_session_rank agent_session_name agent_session_state \
-      agent_session_reason agent_session_age agent_session_kind agent_session_project; do
-      agent_session_cell="$(agent_session_state_cell "$agent_session_state" "$agent_session_reason")"
+      agent_session_age agent_session_kind agent_session_project; do
+      agent_session_cell="$(agent_session_state_cell "$agent_session_state")"
       if [ "$agent_session_state" != none ]; then
         agent_session_age_disp="${agent_session_age}m"
       else
@@ -268,8 +261,8 @@ agent_session_list() {
     printf 'STATE\tAGE\tAGENT\tPROJECT\tSESSION\n'
     printf '%s\n' "$agent_session_rows" | while IFS="$agent_session_tab" \
       read -r _agent_session_rank agent_session_name agent_session_state \
-        agent_session_reason agent_session_age agent_session_kind agent_session_project; do
-        agent_session_label="$(agent_session_state_label "$agent_session_state" "$agent_session_reason")"
+        agent_session_age agent_session_kind agent_session_project; do
+        agent_session_label="$(agent_session_state_label "$agent_session_state")"
         if [ "$agent_session_state" != none ]; then
           agent_session_age_disp="${agent_session_age}m"
         else

@@ -197,7 +197,7 @@ tmux では `Prefix + u` でポップアップ表示できます（`r` で再取
 右ペインには `capture-pane` による各セッションのライブプレビューを表示します。テキストで一覧だけ取りたい場合は `agent-session list` を実行します。`STATE` 列を一番左に置き、要対応のものが上に並ぶよう並び替えます。なお picker は開いた時点のスナップショットで、開いている間は自動再描画しません（`ctrl-r` で再読込）。
 
 - **検知の仕組み**: セッション維持型ポップアップ（`prefix + A` / `o` / `G`）で起動した popup セッションには、`dot_tmux_open_persistent_popup_session` が種別マーカー `@agent`（`claude` / `codex` / `gemini`）を刻みます。picker はこの `@agent` 付きセッションを列挙します。エージェントを終了するとセッションも消えるため、tmux のセッション一覧がそのまま「稼働中エージェント」の一覧になります（プロセス走査や常駐は不要）。
-- **状態（STATE）表示**: 各セッションの状態を色付きで表示し、要対応のものを上にソートします。状態は `working`（🔴 作業中）/ `waiting`（🟡 入力・承認待ち）/ `idle`（🟢 完了・あなたの番）の3値で、`waiting` には内訳（`permission` / `question` / `input`）を添えます。状態は Claude/Codex のフックから `agent-session state <mode>` が刻みます（後述）。フック未設定のセッションは `?`（不明）になります。
+- **状態（STATE）表示**: 各セッションの状態を色付きで表示し、要対応のものを上にソートします。一覧に出すのは `working`（🔴 作業中）/ `waiting`（🟡 入力・承認待ち）/ `idle`（🟢 完了・あなたの番）の3値のみ（`wait_reason` はセッションに記録するが列ズレ防止のため一覧には出さない。通知側 `agent-notify` が subtitle で利用する）。状態は Claude/Codex のフックから `agent-session state <mode>` が刻みます（後述）。フック未設定のセッションは `?`（不明）になります。
 - **前提**: `fzf`（Brewfile に記載）。`prefix + a` から起動する都合上、`agent-session` に実行権限が必要です（`chmod +x ~/.local/bin/agent-session`）。
 - **既知の制約**: `@agent` マーカー追加より前から起動していたセッションは、起動し直すまで一覧に出ません。
 
