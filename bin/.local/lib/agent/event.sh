@@ -65,8 +65,11 @@ agent_event_normalize() {
   AGENT_EVENT_MESSAGE=
 
   case "$agent_event_mode" in
-    claude-prompt)
-      # UserPromptSubmit: the user just handed work to Claude.
+    claude-prompt|claude-posttool)
+      # working へ遷移する Claude のイベント。
+      #   claude-prompt   = UserPromptSubmit（ユーザーが作業を渡した直後）
+      #   claude-posttool = PostToolUse（ツール実行直後 = 許可承認や質問回答のあと
+      #                     作業を再開した合図。waiting からの復帰に使う）
       AGENT_EVENT_AGENT=claude
       AGENT_EVENT_STATE=working
       agent_event_payload="$(cat)"
@@ -114,7 +117,8 @@ agent_event_normalize() {
         *) AGENT_EVENT_WAIT_REASON=input ;;
       esac
       ;;
-    codex-prompt)
+    codex-prompt|codex-posttool)
+      # working へ遷移する Codex のイベント（UserPromptSubmit / PostToolUse）。
       AGENT_EVENT_AGENT=codex
       AGENT_EVENT_STATE=working
       agent_event_payload="$(cat)"
