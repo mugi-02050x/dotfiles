@@ -50,7 +50,10 @@ agent_notifier_show_status_line() {
   agent_notifier_tmux="$(dot_tmux_find_executable)" || return 0
   agent_notifier_project="$(basename "$agent_notifier_cwd")"
   agent_notifier_win="$(dot_tmux_statusline_notification_target_label "$agent_notifier_pane" "$agent_notifier_cwd" 2>/dev/null || true)"
-  agent_notifier_text="${agent_notifier_win:+$agent_notifier_win }$agent_notifier_agent ▸ $agent_notifier_project $agent_notifier_state: $agent_notifier_message"
+  # window ラベル(#I:#W)はリポジトリ名=パス basename と重複するため、ラベルがあれば
+  # それを location に使い、取れない場合だけプロジェクト名へフォールバックする。
+  agent_notifier_location="${agent_notifier_win:-$agent_notifier_project}"
+  agent_notifier_text="$agent_notifier_location $agent_notifier_agent ▸ $agent_notifier_state: $agent_notifier_message"
   # Collapse control characters before storing the text in a global tmux option.
   agent_notifier_text="$(printf '%s' "$agent_notifier_text" | tr '\n\r\t' '   ' | agent_notifier_clip_width "$AGENT_NOTIFY_WIDTH")"
   agent_notifier_token="$$-$(date +%s 2>/dev/null || echo 0)"
