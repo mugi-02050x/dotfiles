@@ -258,14 +258,14 @@ dot_tmux_focus_pane() {
 
 # 指定 pane の所属セッションへ agent のライフサイクル状態を刻む。
 #   引数: <pane> <state: working|waiting|idle> [wait_reason: permission|question|input]
-# agent-session の一覧/picker が #{@agent_state} 等を読んで表示する。pane 未指定や
-# tmux 外なら no-op（フックから安全に呼べる）。@agent_state_at は経過時間表示用の epoch。
-# wait_reason は state==waiting のときだけ意味を持つ（読む側でゲートするため、working/idle
-# 遷移時のクリアは不要だが、stale を避けるため毎回上書きする）。
+# agent-session の一覧/picker が #{@agent_state} を読んで表示する。pane 未指定や
+# tmux 外なら no-op（フックから安全に呼べる）。wait_reason は state==waiting のときだけ
+# 意味を持つ（読む側でゲートするため、working/idle 遷移時のクリアは不要だが、stale を
+# 避けるため毎回上書きする）。agent-notify が通知 subtitle で利用する。
 #
 # このフックはツール実行ごとに走り得るため tmux 呼び出しを最小化する。set-option -t <pane>
 # はセッションオプションを pane の所属セッションへ解決して適用するので session 解決の
-# display-message を省き、3 つの set-option を 1 回の tmux 起動にチェーンする（pane が
+# display-message を省き、2 つの set-option を 1 回の tmux 起動にチェーンする（pane が
 # 無効なら set-option は失敗するだけで実害なく no-op）。
 dot_tmux_mark_agent_state() {
   dot_tmux_pane="${1:-}"
@@ -289,13 +289,11 @@ dot_tmux_mark_agent_state() {
   [ "$dot_tmux_state_last" = "$dot_tmux_state_new" ] && return 0
 
   dot_tmux_tmux="$(dot_tmux_find_executable)" || return 0
-  dot_tmux_state_at="$(date +%s 2>/dev/null || echo 0)"
 
   # set-option -t <pane> はセッションオプションを pane 経由で解決するため、session 解決の
-  # display-message を省き、3 つを 1 回の tmux 起動にチェーンする。
+  # display-message を省き、2 つを 1 回の tmux 起動にチェーンする。
   "$dot_tmux_tmux" \
     set-option -t "$dot_tmux_pane" @agent_state "$dot_tmux_state" ';' \
-    set-option -t "$dot_tmux_pane" @agent_state_at "$dot_tmux_state_at" ';' \
     set-option -t "$dot_tmux_pane" @agent_wait_reason "$dot_tmux_wait_reason" \
     2>/dev/null || return 0
 

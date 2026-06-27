@@ -7,8 +7,8 @@
 # が終わると agent プロセスも終わり popup セッションも消えるため、tmux のセッション
 # 一覧がそのまま「稼働中 agent」の自己掃除されるレジストリになる。
 #
-# 状態（working/waiting/idle）は @agent_state / @agent_state_at / @agent_wait_reason
-# として各セッションに刻まれる。刻むのは Claude/Codex のフックから呼ばれる `state`
+# 状態（working/waiting/idle）は @agent_state / @agent_wait_reason として各セッションに
+# 刻まれる。刻むのは Claude/Codex のフックから呼ばれる `state`
 # サブコマンドで、event.sh が payload を working/waiting/idle + wait_reason へ正規化する
 # （agent-notify と同じ分類器を使い、解釈だけ別。issue #52 / #64 参照）。
 #
@@ -55,18 +55,17 @@ agent_session_record_state() {
 }
 
 # @agent マーカー付きセッションを rank 付きの生データとして出力する（color なし）。
-# 形式: rank<TAB>session<TAB>state<TAB>age_min<TAB>agent<TAB>project
-# rank は注意が必要な状態ほど小さく（waiting<idle<unknown<working）、同 rank 内は
-# 経過時間昇順（直近に状態が変わったものが上）。list / picker はこれを各々整形する。
+# 形式: rank<TAB>session<TAB>state<TAB>agent<TAB>project
+# rank は注意が必要な状態ほど小さく（waiting<idle<unknown<working）。
+# list / picker はこれを各々整形する。
 agent_session_emit_rows() {
   agent_session_tmux="$(dot_tmux_find_executable)" || return 0
-  agent_session_now="$(date +%s 2>/dev/null || echo 0)"
   agent_session_tab="$(printf '\t')"
 
   "$agent_session_tmux" list-sessions \
-    -F '#{session_name}|#{@agent}|#{@agent_state}|#{@agent_state_at}|#{pane_current_path}' 2>/dev/null \
+    -F '#{session_name}|#{@agent}|#{@agent_state}|#{pane_current_path}' 2>/dev/null \
   | while IFS='|' read -r agent_session_name agent_session_kind agent_session_state \
-      agent_session_at agent_session_path; do
+      agent_session_path; do
       [ -n "$agent_session_kind" ] || continue
 
       case "$agent_session_state" in
@@ -76,25 +75,16 @@ agent_session_emit_rows() {
         *)       agent_session_rank=2 ;;
       esac
 
-      # @agent_state と @agent_state_at は常に一緒に刻まれるため、state があれば
-      # at もある前提で経過分を計算する（無ければ age_min=0 / 表示は "-"）。
-      if [ -n "$agent_session_at" ] && [ "$agent_session_at" -gt 0 ] 2>/dev/null; then
-        agent_session_age=$(( (agent_session_now - agent_session_at) / 60 ))
-        [ "$agent_session_age" -ge 0 ] || agent_session_age=0
-      else
-        agent_session_age=0
-      fi
-
       agent_session_project="${agent_session_path##*/}"
       [ -n "$agent_session_project" ] || agent_session_project="$agent_session_name"
 
       # state は空になり得る（unknown）。空フィールドのままだと読み手の
       # `IFS=<TAB> read` がタブ(空白系IFS)を結合して列がズレるため、none で潰す。
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\n' \
         "$agent_session_rank" "$agent_session_name" "${agent_session_state:-none}" \
-        "$agent_session_age" "$agent_session_kind" "$agent_session_project"
+        "$agent_session_kind" "$agent_session_project"
     done \
-  | sort -t"$agent_session_tab" -k1,1n -k4,4n
+  | sort -t"$agent_session_tab" -k1,1n
 }
 
 # state を人間向けのプレーンラベルにする（wait_reason は一覧では出さない）。
@@ -107,34 +97,32 @@ agent_session_state_label() {
   esac
 }
 
-# state を ANSI 色付きの ● ラベルにする（picker 用）。
+# state を ANSI 色付き ● ＋ 固定幅ラベルにする（picker 用）。fzf は --with-nth で選んだ
+# フィールドを単純連結し列パディングしないため、ラベルを %-7s で固定幅にして桁を揃える。
 agent_session_state_cell() {
   agent_session_cell_label="$(agent_session_state_label "${1:-}")"
   case "${1:-}" in
-    waiting) printf '\033[33m●\033[0m %s' "$agent_session_cell_label" ;;  # yellow: 要対応
-    idle)    printf '\033[32m●\033[0m %s' "$agent_session_cell_label" ;;  # green : 完了・あなたの番
-    working) printf '\033[31m●\033[0m %s' "$agent_session_cell_label" ;;  # red   : 作業中
-    *)       printf '\033[90m●\033[0m %s' "$agent_session_cell_label" ;;  # grey : 不明
+    waiting) agent_session_cell_color=33 ;;  # yellow: 要対応
+    idle)    agent_session_cell_color=32 ;;  # green : 完了・あなたの番
+    working) agent_session_cell_color=31 ;;  # red   : 作業中
+    *)       agent_session_cell_color=90 ;;  # grey : 不明
   esac
+  printf '\033[%sm●\033[0m %-7s' "$agent_session_cell_color" "$agent_session_cell_label"
 }
 
-# emit_rows を picker(fzf) 用の表示行へ整形する。color 付き state を先頭側に置き、
-# session(field2) は key として隠す。reload でも同じ整形を使う。
-# 形式: rank<TAB>session<TAB>colored_state<TAB>age<TAB>agent<TAB>project
+# emit_rows を picker(fzf) 用の行へ整形する。fzf は列パディングしないので、表示部分は
+# 自前で固定幅整形した 1 フィールドにまとめ（--with-nth=1 で表示）、可変幅・全角を含み得る
+# project を末尾に置いて桁ズレを後続へ波及させない。session は隠しキー（field2 = {2}）。
+# 形式: "<colored ●> <state-7> <agent-6> <project>"<TAB>session
 agent_session_picker_rows() {
   agent_session_tab="$(printf '\t')"
   agent_session_emit_rows | while IFS="$agent_session_tab" \
-    read -r agent_session_rank agent_session_name agent_session_state \
-      agent_session_age agent_session_kind agent_session_project; do
+    read -r _agent_session_rank agent_session_name agent_session_state \
+      agent_session_kind agent_session_project; do
       agent_session_cell="$(agent_session_state_cell "$agent_session_state")"
-      if [ "$agent_session_state" != none ]; then
-        agent_session_age_disp="${agent_session_age}m"
-      else
-        agent_session_age_disp='-'
-      fi
-      printf '%s\t%s\t%s\t%5s\t%s\t%s\n' \
-        "$agent_session_rank" "$agent_session_name" "$agent_session_cell" \
-        "$agent_session_age_disp" "$agent_session_kind" "$agent_session_project"
+      printf '%s %-6s %s\t%s\n' \
+        "$agent_session_cell" "$agent_session_kind" "$agent_session_project" \
+        "$agent_session_name"
     done
 }
 
@@ -235,7 +223,7 @@ agent_session_picker() {
 
   agent_session_sel="$(
     printf '%s\n' "$agent_session_rows" | FZF_DEFAULT_OPTS='' fzf \
-      --ansi --delimiter='\t' --with-nth=3,4,5,6 \
+      --ansi --delimiter='\t' --with-nth=1 \
       --reverse --cycle \
       --header="$AGENT_SESSION_HEADER" \
       --preview="$agent_session_tmux capture-pane -ept {2}" \
@@ -249,7 +237,7 @@ agent_session_picker() {
   agent_session_jump "$agent_session_target"
 }
 
-# 人間向けのテキスト一覧。STATE を一番左に置く。
+# 人間向けのテキスト一覧。STATE を一番左に、可変幅・全角を含み得る PROJECT を末尾に置く。
 agent_session_list() {
   agent_session_tab="$(printf '\t')"
   agent_session_rows="$(agent_session_emit_rows)"
@@ -258,19 +246,14 @@ agent_session_list() {
     return 0
   fi
   {
-    printf 'STATE\tAGE\tAGENT\tPROJECT\tSESSION\n'
+    printf 'STATE\tAGENT\tSESSION\tPROJECT\n'
     printf '%s\n' "$agent_session_rows" | while IFS="$agent_session_tab" \
       read -r _agent_session_rank agent_session_name agent_session_state \
-        agent_session_age agent_session_kind agent_session_project; do
+        agent_session_kind agent_session_project; do
         agent_session_label="$(agent_session_state_label "$agent_session_state")"
-        if [ "$agent_session_state" != none ]; then
-          agent_session_age_disp="${agent_session_age}m"
-        else
-          agent_session_age_disp='-'
-        fi
-        printf '%s\t%s\t%s\t%s\t%s\n' \
-          "$agent_session_label" "$agent_session_age_disp" "$agent_session_kind" \
-          "$agent_session_project" "$agent_session_name"
+        printf '%s\t%s\t%s\t%s\n' \
+          "$agent_session_label" "$agent_session_kind" "$agent_session_name" \
+          "$agent_session_project"
       done
   } | column -ts"$agent_session_tab"
 }
