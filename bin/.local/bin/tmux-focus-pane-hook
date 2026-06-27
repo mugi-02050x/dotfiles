@@ -1,0 +1,22 @@
+#!/bin/sh
+# terminal-notifier の -execute から呼ばれ、通知クリックで指定 tmux ペインへ復帰する hook。
+#   引数: TMUX_PANE（例: %52）
+# terminal-notifier の GUI 実行コンテキストは PATH を継承しないため tmux はフルパス指定する。
+set -eu
+
+PANE="${1:-}"
+[ -n "$PANE" ] || exit 0
+
+SELF_DIR="$(unset CDPATH; cd "$(dirname "$0")" && pwd)"
+LIB_DIR="$(unset CDPATH; cd "$SELF_DIR/../lib" && pwd)"
+. "$LIB_DIR/tmux.sh"
+
+# iTerm を先に前面化する。osascript の activate は背景プロセス（terminal-notifier の
+# -execute 経由）からだと macOS のフォーカス奪取抑止で前面化せず（exit 0 でも無効）、
+# LaunchServices 経由の open -a なら確実に前面化する。
+# また display-popup はポップアップが閉じるまでブロックすることがあるため、tmux 操作
+# より前に前面化しておく（末尾に置くとポップアップ再オープン時に実行されない）。
+# terminal-notifier は -execute と -activate を併用すると -execute のみ実行するため、
+# 前面化はこの -execute 側で行う必要がある。
+open -a iTerm 2>/dev/null || true
+dot_tmux_focus_pane "$PANE"
