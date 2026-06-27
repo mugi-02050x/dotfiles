@@ -51,7 +51,7 @@ agent_session_jump() {
   [ -n "$agent_session_parent" ] || agent_session_parent="$(dot_tmux_find_main_client || true)"
 
   agent_session_pane="$("$agent_session_tmux" display-message -p -t "$agent_session_target" '#{pane_id}' 2>/dev/null || true)"
-  agent_session_origin="$(dot_tmux_resolve_notification_target_window "$agent_session_pane" || true)"
+  agent_session_origin="$(dot_tmux_resolve_origin_window "$agent_session_pane" || true)"
   if [ -n "$agent_session_origin" ] && [ -n "$agent_session_parent" ]; then
     agent_session_origin_session="${agent_session_origin%%|*}"
     agent_session_origin_rest="${agent_session_origin#*|}"

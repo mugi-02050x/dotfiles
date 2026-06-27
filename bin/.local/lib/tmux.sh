@@ -112,9 +112,10 @@ dot_tmux_find_origin_window_by_path() {
     done
 }
 
-# 指定 pane から通知対象 window を解決し、"session_name|window_id|pane_tty" で返す。
+# 指定 pane に対応する本来の window を解決し、"session_name|window_id|pane_tty" で返す。
 # 通常 pane ならその pane、popup session なら起動元 window の active pane を返す。
-dot_tmux_resolve_notification_target_window() {
+# 通知・status line・フォーカス復帰・agent 一覧からの復帰など、用途を問わず共通で使う。
+dot_tmux_resolve_origin_window() {
   dot_tmux_pane="${1:-}"
   dot_tmux_cwd="${2:-}"
   [ -n "$dot_tmux_pane" ] || return 1
@@ -137,7 +138,7 @@ dot_tmux_resolve_notification_target_window() {
 # 指定 pane の通知対象 window へ BEL を送り、tmux の window bell flag を立てる。
 # 通常 pane ならその pane、popup session なら起動元 window の active pane を対象にする。
 dot_tmux_send_bell_to_notification_target_window() {
-  dot_tmux_related="$(dot_tmux_resolve_notification_target_window "${1:-}" "${2:-}" || true)"
+  dot_tmux_related="$(dot_tmux_resolve_origin_window "${1:-}" "${2:-}" || true)"
   dot_tmux_tty="${dot_tmux_related##*|}"
 
   [ -n "$dot_tmux_tty" ] && printf '\a' > "$dot_tmux_tty" 2>/dev/null || true
@@ -147,7 +148,7 @@ dot_tmux_send_bell_to_notification_target_window() {
 # 指定 pane の通知対象 window を status line 表示用の "#I:#W" ラベルで返す。
 dot_tmux_statusline_notification_target_label() {
   dot_tmux_tmux="$(dot_tmux_find_executable)" || return 0
-  dot_tmux_related="$(dot_tmux_resolve_notification_target_window "${1:-}" "${2:-}" || true)"
+  dot_tmux_related="$(dot_tmux_resolve_origin_window "${1:-}" "${2:-}" || true)"
   [ -n "$dot_tmux_related" ] || return 0
   dot_tmux_related_rest="${dot_tmux_related#*|}"
   dot_tmux_target_window="${dot_tmux_related_rest%%|*}"
@@ -228,7 +229,7 @@ dot_tmux_focus_pane() {
     # デタッチ時に元セッションへ戻れず tmux を抜けてしまうため行わない。
     dot_tmux_main_client="$(dot_tmux_find_main_client || true)"
     if [ -n "$dot_tmux_main_client" ]; then
-      dot_tmux_origin="$(dot_tmux_resolve_notification_target_window "$dot_tmux_pane" || true)"
+      dot_tmux_origin="$(dot_tmux_resolve_origin_window "$dot_tmux_pane" || true)"
       if [ -n "$dot_tmux_origin" ]; then
         dot_tmux_origin_session="${dot_tmux_origin%%|*}"
         dot_tmux_origin_rest="${dot_tmux_origin#*|}"
