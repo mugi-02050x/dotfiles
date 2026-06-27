@@ -198,6 +198,8 @@ dot_tmux_open_persistent_popup_session() {
       "$dot_tmux_popup_cmd"
     "$dot_tmux_tmux" set-option -t "$dot_tmux_session" window-size latest
     "$dot_tmux_tmux" set-option -t "$dot_tmux_session" @popup 1
+    # 稼働中 agent の一覧（agent-session）が種別付きで検知できるようマーカーを刻む。
+    "$dot_tmux_tmux" set-option -t "$dot_tmux_session" @agent "$dot_tmux_popup_name"
   fi
 
   "$dot_tmux_tmux" display-popup \

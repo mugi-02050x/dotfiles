@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# 稼働中の AI エージェント（Claude/Codex/Gemini）popup セッションを一覧し、
+# fzf picker から復帰（jump）・終了（kill）できるようにする。
+#
+# 検知は tmux セッションの @agent マーカー（launcher が popup 起動時に種別を刻む。
+# lib/tmux.sh の dot_tmux_open_persistent_popup_session 参照）に依存する。セッション
+# が終わると agent プロセスも終わり popup セッションも消えるため、tmux のセッション
+# 一覧がそのまま「稼働中 agent」の自己掃除されるレジストリになる。
+#
+# 使い方:
+#   agent-session list            # 稼働中 agent をテキストで一覧表示
+#   agent-session pick [session]   # fzf picker を popup で開く（キーバインド入口）
+#   agent-session _picker          # （内部）popup 内で動く fzf 本体
+#   agent-session _rows            # （内部）picker の行データ（fzf reload 用）
+#
+set -uo pipefail
+
+SELF_FILE="$(unset CDPATH; cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+LIB_DIR="$(unset CDPATH; cd "$(dirname "$SELF_FILE")/../lib" && pwd)"
+# shellcheck source=/dev/null
+. "$LIB_DIR/process.sh"
+# shellcheck source=/dev/null
+. "$LIB_DIR/tmux.sh"
+
+AGENT_SESSION_POPUP_WIDTH="${AGENT_SESSION_POPUP_WIDTH:-90%}"
+AGENT_SESSION_POPUP_HEIGHT="${AGENT_SESSION_POPUP_HEIGHT:-90%}"
+
+# @agent マーカー付きセッションを "session<TAB>agent<TAB>status<TAB>project" で出力する。
+# status は将来の state hook 用の枠で、現状は常に "?"（一覧・jump・kill のみ）。
+agent_session_emit_rows() {
+  agent_session_tmux="$(dot_tmux_find_executable)" || return 0
+  "$agent_session_tmux" list-sessions -F '#{session_name}|#{@agent}' 2>/dev/null \
+  | while IFS='|' read -r agent_session_name agent_session_kind; do
+      [ -n "$agent_session_kind" ] || continue
+      agent_session_path="$("$agent_session_tmux" display-message -p -t "$agent_session_name" '#{pane_current_path}' 2>/dev/null || true)"
+      agent_session_project="${agent_session_path##*/}"
+      [ -n "$agent_session_project" ] || agent_session_project="$agent_session_name"
+      printf '%s\t%s\t%s\t%s\n' \
+        "$agent_session_name" "$agent_session_kind" '?' "$agent_session_project"
+    done
+}
+
+# 対象 popup セッションへ復帰する。起動元 window へメインクライアントを移してから、
+# この popup 内で対象セッションへアタッチし直す（lib の jump 挙動に合わせる）。
+agent_session_jump() {
+  agent_session_target="${1:-}"
+  [ -n "$agent_session_target" ] || return 0
+
+  agent_session_tmux="$(dot_tmux_find_executable)" || return 0
+  agent_session_parent="$("$agent_session_tmux" show-options -gqv @agent_picker_parent 2>/dev/null || true)"
+  [ -n "$agent_session_parent" ] || agent_session_parent="$(dot_tmux_find_main_client || true)"
+
+  agent_session_pane="$("$agent_session_tmux" display-message -p -t "$agent_session_target" '#{pane_id}' 2>/dev/null || true)"
+  agent_session_origin="$(dot_tmux_resolve_notification_target_window "$agent_session_pane" || true)"
+  if [ -n "$agent_session_origin" ] && [ -n "$agent_session_parent" ]; then
+    agent_session_origin_session="${agent_session_origin%%|*}"
+    agent_session_origin_rest="${agent_session_origin#*|}"
+    agent_session_origin_window="${agent_session_origin_rest%%|*}"
+    "$agent_session_tmux" switch-client -c "$agent_session_parent" -t "$agent_session_origin_session" 2>/dev/null || true
+    "$agent_session_tmux" select-window -t "$agent_session_origin_window" 2>/dev/null || true
+  fi
+
+  exec "$agent_session_tmux" attach-session -t "$agent_session_target"
+}
+
+# キーバインド入口。popup 内から呼ばれた場合はその popup を閉じてから、メイン
+# クライアント上で picker を開く（popup-in-popup を避ける）。
+agent_session_pick() {
+  agent_session_current="${1:-}"
+  agent_session_tmux="$(dot_tmux_find_executable)" || return 0
+  [ -n "$agent_session_current" ] || \
+    agent_session_current="$("$agent_session_tmux" display-message -p '#{session_name}' 2>/dev/null || true)"
+
+  if [ -n "$agent_session_current" ] && dot_tmux_is_popup_session "$agent_session_current"; then
+    "$agent_session_tmux" detach-client -s "$agent_session_current" 2>/dev/null || true
+    agent_session_i=0
+    while [ "$agent_session_i" -lt 100 ] && dot_tmux_session_has_client "$agent_session_current"; do
+      sleep 0.05
+      agent_session_i=$((agent_session_i + 1))
+    done
+  fi
+
+  agent_session_host="$(dot_tmux_find_main_client || true)"
+  "$agent_session_tmux" set-option -g @agent_picker_parent "$agent_session_host" 2>/dev/null || true
+
+  if [ -n "$agent_session_host" ]; then
+    "$agent_session_tmux" display-popup -c "$agent_session_host" \
+      -w "$AGENT_SESSION_POPUP_WIDTH" -h "$AGENT_SESSION_POPUP_HEIGHT" \
+      -E "$SELF_FILE _picker"
+  else
+    "$agent_session_tmux" display-popup \
+      -w "$AGENT_SESSION_POPUP_WIDTH" -h "$AGENT_SESSION_POPUP_HEIGHT" \
+      -E "$SELF_FILE _picker"
+  fi
+}
+
+# popup 内で動く fzf 本体。enter で jump、ctrl-x で kill（+ reload）。
+agent_session_picker() {
+  agent_session_tmux="$(dot_tmux_find_executable)" || return 0
+
+  if ! command -v fzf >/dev/null 2>&1; then
+    "$agent_session_tmux" display-message 'agent-session: fzf が必要です' 2>/dev/null || true
+    return 0
+  fi
+
+  agent_session_rows="$(agent_session_emit_rows)"
+  if [ -z "$agent_session_rows" ]; then
+    printf '稼働中の agent セッションはありません\n'
+    sleep 1.2
+    return 0
+  fi
+
+  agent_session_sel="$(
+    printf '%s\n' "$agent_session_rows" | FZF_DEFAULT_OPTS='' fzf \
+      --ansi --delimiter='\t' --with-nth=2,3,4 \
+      --reverse --cycle \
+      --header='agent sessions · enter: jump · ctrl-x: kill' \
+      --preview="$agent_session_tmux capture-pane -ept {1}" \
+      --preview-window='right,62%,wrap' \
+      --bind="ctrl-x:execute-silent($agent_session_tmux kill-session -t {1})+reload($SELF_FILE _rows)"
+  )" || true
+
+  [ -n "$agent_session_sel" ] || return 0
+  agent_session_target="$(printf '%s' "$agent_session_sel" | cut -f1)"
+  agent_session_jump "$agent_session_target"
+}
+
+# 人間向けのテキスト一覧。
+agent_session_list() {
+  agent_session_rows="$(agent_session_emit_rows)"
+  if [ -z "$agent_session_rows" ]; then
+    printf '稼働中の agent セッションはありません\n'
+    return 0
+  fi
+  {
+    printf 'AGENT\tSTATUS\tPROJECT\tSESSION\n'
+    printf '%s\n' "$agent_session_rows" \
+      | awk -F'\t' '{ printf "%s\t%s\t%s\t%s\n", $2, $3, $4, $1 }'
+  } | column -ts"$(printf '\t')"
+}
+
+case "${1:-list}" in
+  list)    agent_session_list ;;
+  pick)    agent_session_pick "${2:-}" ;;
+  _picker) agent_session_picker ;;
+  _rows)   agent_session_emit_rows ;;
+  *)
+    printf 'agent-session: unknown subcommand: %s\n' "${1:-}" >&2
+    printf 'usage: agent-session [list|pick]\n' >&2
+    exit 2
+    ;;
+esac
