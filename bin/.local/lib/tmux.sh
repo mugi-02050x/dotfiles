@@ -3,6 +3,7 @@
 
 DOT_TMUX_LIB_DIR="${DOT_TMUX_LIB_DIR:-$HOME/.local/lib}"
 if ! command -v dot_process_list_ancestors >/dev/null 2>&1 && [ -f "$DOT_TMUX_LIB_DIR/process.sh" ]; then
+  # shellcheck source=/dev/null
   . "$DOT_TMUX_LIB_DIR/process.sh"
 fi
 
@@ -253,4 +254,49 @@ dot_tmux_focus_pane() {
       fi
     fi
   fi
+}
+
+# 指定 pane の所属セッションへ agent のライフサイクル状態を刻む。
+#   引数: <pane> <state: working|waiting|idle> [wait_reason: permission|question|input]
+# agent-session の一覧/picker が #{@agent_state} を読んで表示する。pane 未指定や
+# tmux 外なら no-op（フックから安全に呼べる）。wait_reason は state==waiting のときだけ
+# 意味を持つ（読む側でゲートするため、working/idle 遷移時のクリアは不要だが、stale を
+# 避けるため毎回上書きする）。agent-notify が通知 subtitle で利用する。
+#
+# このフックはツール実行ごとに走り得るため tmux 呼び出しを最小化する。set-option -t <pane>
+# はセッションオプションを pane の所属セッションへ解決して適用するので session 解決の
+# display-message を省き、2 つの set-option を 1 回の tmux 起動にチェーンする（pane が
+# 無効なら set-option は失敗するだけで実害なく no-op）。
+dot_tmux_mark_agent_state() {
+  dot_tmux_pane="${1:-}"
+  dot_tmux_state="${2:-}"
+  dot_tmux_wait_reason="${3:-}"
+  [ -n "$dot_tmux_pane" ] && [ -n "$dot_tmux_state" ] || return 0
+
+  # 同一状態の再スタンプ（特に PostToolUse による working 連続）を避けるため、pane ごとの
+  # 直近状態をマーカーファイルで覚えておき、変化が無ければ date も tmux 呼び出しも省く。
+  # 判定はシェル組み込み（read / リダイレクト）で行い追加 spawn を出さない。全 writer
+  # （agent-notify / agent-session）が共有プリミティブのここを通るのでマーカーと
+  # @agent_state は同期する。tmux サーバ再起動での pane id 再利用に備え、$TMUX から
+  # 取り出したサーバ PID をキーに含めてマーカー名前空間を分ける（spawn 無しの展開のみ）。
+  dot_tmux_state_srv="${TMUX##*/}"           # "default,<pid>,<session>"（socket dir を除去）
+  dot_tmux_state_srv="${dot_tmux_state_srv#*,}"
+  dot_tmux_state_srv="${dot_tmux_state_srv%%,*}"
+  dot_tmux_state_marker="${TMPDIR:-/tmp}/.agent-state-${dot_tmux_state_srv}-${dot_tmux_pane}"
+  dot_tmux_state_new="${dot_tmux_state}:${dot_tmux_wait_reason}"
+  dot_tmux_state_last=
+  [ -f "$dot_tmux_state_marker" ] && IFS= read -r dot_tmux_state_last < "$dot_tmux_state_marker" 2>/dev/null
+  [ "$dot_tmux_state_last" = "$dot_tmux_state_new" ] && return 0
+
+  dot_tmux_tmux="$(dot_tmux_find_executable)" || return 0
+
+  # set-option -t <pane> はセッションオプションを pane 経由で解決するため、session 解決の
+  # display-message を省き、2 つを 1 回の tmux 起動にチェーンする。
+  "$dot_tmux_tmux" \
+    set-option -t "$dot_tmux_pane" @agent_state "$dot_tmux_state" ';' \
+    set-option -t "$dot_tmux_pane" @agent_wait_reason "$dot_tmux_wait_reason" \
+    2>/dev/null || return 0
+
+  # tmux 書き込みが成功した場合のみマーカーを更新する（失敗時は次回も書きに行く）。
+  printf '%s' "$dot_tmux_state_new" > "$dot_tmux_state_marker" 2>/dev/null || true
 }

@@ -191,13 +191,100 @@ tmux では `Prefix + u` でポップアップ表示できます（`r` で再取
 | --- | --- |
 | `enter` | 選択したセッションへ復帰（起動元ウィンドウへ移動してから popup を開き直す） |
 | `ctrl-x` ×2 | 選択したセッションを終了（1 回目で警告ヘッダを表示し、同じ行でもう一度押すと実行。別の行へ移ると取り消し） |
+| `ctrl-r` | 一覧を再読込（STATE を最新化）。picker は自動更新しないため、状態の鮮度を上げたいときに使う |
 | `↑` / `↓`・入力 | fzf の絞り込み |
 
-右ペインには `capture-pane` による各セッションのライブプレビューを表示します。テキストで一覧だけ取りたい場合は `agent-session list` を実行します。
+右ペインには `capture-pane` による各セッションのライブプレビューを表示します。テキストで一覧だけ取りたい場合は `agent-session list` を実行します。`STATE` 列を一番左に置き、要対応のものが上に並ぶよう並び替えます。なお picker は開いた時点のスナップショットで、開いている間は自動再描画しません（`ctrl-r` で再読込）。
 
 - **検知の仕組み**: セッション維持型ポップアップ（`prefix + A` / `o` / `G`）で起動した popup セッションには、`dot_tmux_open_persistent_popup_session` が種別マーカー `@agent`（`claude` / `codex` / `gemini`）を刻みます。picker はこの `@agent` 付きセッションを列挙します。エージェントを終了するとセッションも消えるため、tmux のセッション一覧がそのまま「稼働中エージェント」の一覧になります（プロセス走査や常駐は不要）。
+- **状態（STATE）表示**: 各セッションの状態を色付きで表示し、要対応のものを上にソートします。一覧に出すのは `working`（🔴 作業中）/ `waiting`（🟡 入力・承認待ち）/ `idle`（🟢 完了・あなたの番）の3値のみ（`wait_reason` はセッションに記録するが列ズレ防止のため一覧には出さない。通知側 `agent-notify` が subtitle で利用する）。状態は Claude/Codex のフックから `agent-session state <mode>` が刻みます（後述）。フック未設定のセッションは `?`（不明）になります。
 - **前提**: `fzf`（Brewfile に記載）。`prefix + a` から起動する都合上、`agent-session` に実行権限が必要です（`chmod +x ~/.local/bin/agent-session`）。
-- **既知の制約**: `@agent` マーカー追加より前から起動していたセッションは、起動し直すまで一覧に出ません。また現状は状態列を `?` 固定としており、稼働中/承認待ち/完了（working/waiting/idle）の表示は今後 Claude/Codex のフック対応で追加予定です。
+- **既知の制約**: `@agent` マーカー追加より前から起動していたセッションは、起動し直すまで一覧に出ません。
+
+### 状態（STATE）表示の設定
+
+状態は通知（`agent-notify`）とは独立に、`agent-session state <mode>` をフックに配線して刻みます。`agent-notify` と同じ `event.sh` で payload を `working` / `waiting` / `idle`（+ `wait_reason`）へ正規化し、`agent-notify` は通知を、`agent-session` はセッションへの状態スタンプを、それぞれ独自に行います。通知と状態表示は併存し、どちらか片方だけでも動きます。
+
+mode と状態の対応:
+
+| agent | フック | mode | state |
+| --- | --- | --- | --- |
+| Claude | `UserPromptSubmit` | `claude-prompt` | `working` |
+| Claude | `PostToolUse`（全ツール） | `claude-posttool` | `working` |
+| Claude | `Notification` | `claude-notification` | `waiting`（message から permission / input を判定） |
+| Claude | `PreToolUse`（`AskUserQuestion`） | `claude-ask` | `waiting:question` |
+| Claude | `Stop` | `claude-stop` | `idle` |
+| Codex | `UserPromptSubmit` | `codex-prompt` | `working` |
+| Codex | `PostToolUse`（全ツール） | `codex-posttool` | `working` |
+| Codex | `PermissionRequest` | `codex-notification` | `waiting:permission` |
+| Codex | `Stop` | `codex-stop` | `idle` |
+
+`PostToolUse` を `working` に割り当てているのは、許可承認や質問回答のあと作業を再開した合図を拾い、`waiting` から `working` へ復帰させるためです（これが無いと次の `Stop` まで `waiting` 表示が居座る）。ツール実行ごとに走るため負荷を抑える工夫を入れている: ① `dot_tmux_mark_agent_state` は tmux 呼び出しを 1 回にチェーン、② pane ごとのマーカーファイルで直近状態を覚え、同一状態なら `tmux` 呼び出しを省く。結果、`working` 連続中のスキップ経路は約 15ms/回、状態変化を伴う書き込みでも約 20ms/回。
+
+Claude Code（`~/.claude/settings.json`、既存の `agent-notify` フックへ追記）:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-session state claude-prompt" }
+      ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-session state claude-posttool" }
+      ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "AskUserQuestion", "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-session state claude-ask" }
+      ] }
+    ],
+    "Notification": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-session state claude-notification" }
+      ] }
+    ],
+    "Stop": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-session state claude-stop" }
+      ] }
+    ]
+  }
+}
+```
+
+Codex（`~/.codex/hooks.json`）:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-session state codex-prompt" }
+      ] }
+    ],
+    "PostToolUse": [
+      { "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-session state codex-posttool" }
+      ] }
+    ],
+    "PermissionRequest": [
+      { "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-session state codex-notification" }
+      ] }
+    ],
+    "Stop": [
+      { "hooks": [
+        { "type": "command", "command": "/Users/<user>/.local/bin/agent-session state codex-stop" }
+      ] }
+    ]
+  }
+}
+```
+
+> `agent-session state` は通知を出さず、状態スタンプ（`@agent_state` 等）のみを行います。stdout には何も書かないため、`PermissionRequest` の decision は併設の `agent-notify codex-notification` 側が返します。Codex には AskUserQuestion 相当が無いため `claude-ask` の対応はありません。
 
 ## SSH元クリップボードへのコピー
 

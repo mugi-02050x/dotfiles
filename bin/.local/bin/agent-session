@@ -7,11 +7,17 @@
 # が終わると agent プロセスも終わり popup セッションも消えるため、tmux のセッション
 # 一覧がそのまま「稼働中 agent」の自己掃除されるレジストリになる。
 #
+# 状態（working/waiting/idle）は @agent_state / @agent_wait_reason として各セッションに
+# 刻まれる。刻むのは Claude/Codex のフックから呼ばれる `state`
+# サブコマンドで、event.sh が payload を working/waiting/idle + wait_reason へ正規化する
+# （agent-notify と同じ分類器を使い、解釈だけ別。issue #52 / #64 参照）。
+#
 # 使い方:
-#   agent-session list            # 稼働中 agent をテキストで一覧表示
-#   agent-session pick [session]   # fzf picker を popup で開く（キーバインド入口）
-#   agent-session _picker          # （内部）popup 内で動く fzf 本体
-#   agent-session _rows            # （内部）picker の行データ（fzf reload 用）
+#   agent-session list             # 稼働中 agent をテキストで一覧表示
+#   agent-session pick [session]    # fzf picker を popup で開く（キーバインド入口）
+#   agent-session state <mode>      # フックから状態を刻む（stdin に payload）
+#   agent-session _picker           # （内部）popup 内で動く fzf 本体
+#   agent-session _rows             # （内部）picker の行データ（fzf reload 用）
 #
 set -uo pipefail
 
@@ -27,21 +33,96 @@ AGENT_SESSION_POPUP_HEIGHT="${AGENT_SESSION_POPUP_HEIGHT:-90%}"
 
 # picker のヘッダ（通常時）と、kill の二段階確認に使う armed 状態ファイル。
 # 状態ファイルのパスは picker と _confirm_kill の両プロセスで同一に解決される。
-AGENT_SESSION_HEADER='agent sessions · enter: jump · ctrl-x×2: kill'
+AGENT_SESSION_HEADER='agent sessions · enter: jump · ctrl-x×2: kill · ctrl-r: refresh'
 AGENT_SESSION_KILL_ARMED="${TMPDIR:-/tmp}/agent-session-kill-armed"
 
-# @agent マーカー付きセッションを "session<TAB>agent<TAB>status<TAB>project" で出力する。
-# status は将来の state hook 用の枠で、現状は常に "?"（一覧・jump・kill のみ）。
+# フックから呼ばれ、event.sh の正規化結果を tmux セッションへ刻む。
+# 通知は出さない（それは agent-notify の役目）。状態の解釈だけが責務。
+agent_session_record_state() {
+  agent_session_mode="${1:-}"
+  [ -n "$agent_session_mode" ] || return 0
+
+  # shellcheck source=/dev/null
+  . "$LIB_DIR/agent/event.sh"
+  agent_session_rc=0
+  agent_event_normalize "$agent_session_mode" "" || agent_session_rc=$?
+  [ "$agent_session_rc" -eq 0 ] || return 0
+
+  # TMUX_PANE が無い実行コンテキストでは親プロセスから pane を特定する。
+  agent_session_pane="${TMUX_PANE:-}"
+  [ -n "$agent_session_pane" ] || agent_session_pane="$(dot_tmux_resolve_pane_via_pid || true)"
+  dot_tmux_mark_agent_state "$agent_session_pane" "$AGENT_EVENT_STATE" "$AGENT_EVENT_WAIT_REASON"
+}
+
+# @agent マーカー付きセッションを rank 付きの生データとして出力する（color なし）。
+# 形式: rank<TAB>session<TAB>state<TAB>agent<TAB>project
+# rank は注意が必要な状態ほど小さく（waiting<idle<unknown<working）。
+# list / picker はこれを各々整形する。
 agent_session_emit_rows() {
   agent_session_tmux="$(dot_tmux_find_executable)" || return 0
-  "$agent_session_tmux" list-sessions -F '#{session_name}|#{@agent}' 2>/dev/null \
-  | while IFS='|' read -r agent_session_name agent_session_kind; do
+  agent_session_tab="$(printf '\t')"
+
+  "$agent_session_tmux" list-sessions \
+    -F '#{session_name}|#{@agent}|#{@agent_state}|#{pane_current_path}' 2>/dev/null \
+  | while IFS='|' read -r agent_session_name agent_session_kind agent_session_state \
+      agent_session_path; do
       [ -n "$agent_session_kind" ] || continue
-      agent_session_path="$("$agent_session_tmux" display-message -p -t "$agent_session_name" '#{pane_current_path}' 2>/dev/null || true)"
+
+      case "$agent_session_state" in
+        waiting) agent_session_rank=0 ;;
+        idle)    agent_session_rank=1 ;;
+        working) agent_session_rank=3 ;;
+        *)       agent_session_rank=2 ;;
+      esac
+
       agent_session_project="${agent_session_path##*/}"
       [ -n "$agent_session_project" ] || agent_session_project="$agent_session_name"
-      printf '%s\t%s\t%s\t%s\n' \
-        "$agent_session_name" "$agent_session_kind" '?' "$agent_session_project"
+
+      # state は空になり得る（unknown）。空フィールドのままだと読み手の
+      # `IFS=<TAB> read` がタブ(空白系IFS)を結合して列がズレるため、none で潰す。
+      printf '%s\t%s\t%s\t%s\t%s\n' \
+        "$agent_session_rank" "$agent_session_name" "${agent_session_state:-none}" \
+        "$agent_session_kind" "$agent_session_project"
+    done \
+  | sort -t"$agent_session_tab" -k1,1n
+}
+
+# state を人間向けのプレーンラベルにする（wait_reason は一覧では出さない）。
+agent_session_state_label() {
+  case "${1:-}" in
+    waiting) printf 'waiting' ;;
+    idle)    printf 'idle' ;;
+    working) printf 'working' ;;
+    *)       printf '?' ;;
+  esac
+}
+
+# state を ANSI 色付き ● ＋ 固定幅ラベルにする（picker 用）。fzf は --with-nth で選んだ
+# フィールドを単純連結し列パディングしないため、ラベルを %-7s で固定幅にして桁を揃える。
+agent_session_state_cell() {
+  agent_session_cell_label="$(agent_session_state_label "${1:-}")"
+  case "${1:-}" in
+    waiting) agent_session_cell_color=33 ;;  # yellow: 要対応
+    idle)    agent_session_cell_color=32 ;;  # green : 完了・あなたの番
+    working) agent_session_cell_color=31 ;;  # red   : 作業中
+    *)       agent_session_cell_color=90 ;;  # grey : 不明
+  esac
+  printf '\033[%sm●\033[0m %-7s' "$agent_session_cell_color" "$agent_session_cell_label"
+}
+
+# emit_rows を picker(fzf) 用の行へ整形する。fzf は列パディングしないので、表示部分は
+# 自前で固定幅整形した 1 フィールドにまとめ（--with-nth=1 で表示）、可変幅・全角を含み得る
+# project を末尾に置いて桁ズレを後続へ波及させない。session は隠しキー（field2 = {2}）。
+# 形式: "<colored ●> <state-7> <agent-6> <project>"<TAB>session
+agent_session_picker_rows() {
+  agent_session_tab="$(printf '\t')"
+  agent_session_emit_rows | while IFS="$agent_session_tab" \
+    read -r _agent_session_rank agent_session_name agent_session_state \
+      agent_session_kind agent_session_project; do
+      agent_session_cell="$(agent_session_state_cell "$agent_session_state")"
+      printf '%s %-6s %s\t%s\n' \
+        "$agent_session_cell" "$agent_session_kind" "$agent_session_project" \
+        "$agent_session_name"
     done
 }
 
@@ -130,7 +211,7 @@ agent_session_picker() {
     return 0
   fi
 
-  agent_session_rows="$(agent_session_emit_rows)"
+  agent_session_rows="$(agent_session_picker_rows)"
   if [ -z "$agent_session_rows" ]; then
     printf '稼働中の agent セッションはありません\n'
     sleep 1.2
@@ -142,42 +223,51 @@ agent_session_picker() {
 
   agent_session_sel="$(
     printf '%s\n' "$agent_session_rows" | FZF_DEFAULT_OPTS='' fzf \
-      --ansi --delimiter='\t' --with-nth=2,3,4 \
+      --ansi --delimiter='\t' --with-nth=1 \
       --reverse --cycle \
       --header="$AGENT_SESSION_HEADER" \
-      --preview="$agent_session_tmux capture-pane -ept {1}" \
+      --preview="$agent_session_tmux capture-pane -ept {2}" \
       --preview-window='right,62%,wrap' \
-      --bind="ctrl-x:transform:$SELF_FILE _confirm_kill {1}"
+      --bind="ctrl-x:transform:$SELF_FILE _confirm_kill {2}" \
+      --bind="ctrl-r:reload($SELF_FILE _rows)"
   )" || true
 
   [ -n "$agent_session_sel" ] || return 0
-  agent_session_target="$(printf '%s' "$agent_session_sel" | cut -f1)"
+  agent_session_target="$(printf '%s' "$agent_session_sel" | cut -f2)"
   agent_session_jump "$agent_session_target"
 }
 
-# 人間向けのテキスト一覧。
+# 人間向けのテキスト一覧。STATE を一番左に、可変幅・全角を含み得る PROJECT を末尾に置く。
 agent_session_list() {
+  agent_session_tab="$(printf '\t')"
   agent_session_rows="$(agent_session_emit_rows)"
   if [ -z "$agent_session_rows" ]; then
     printf '稼働中の agent セッションはありません\n'
     return 0
   fi
   {
-    printf 'AGENT\tSTATUS\tPROJECT\tSESSION\n'
-    printf '%s\n' "$agent_session_rows" \
-      | awk -F'\t' '{ printf "%s\t%s\t%s\t%s\n", $2, $3, $4, $1 }'
-  } | column -ts"$(printf '\t')"
+    printf 'STATE\tAGENT\tSESSION\tPROJECT\n'
+    printf '%s\n' "$agent_session_rows" | while IFS="$agent_session_tab" \
+      read -r _agent_session_rank agent_session_name agent_session_state \
+        agent_session_kind agent_session_project; do
+        agent_session_label="$(agent_session_state_label "$agent_session_state")"
+        printf '%s\t%s\t%s\t%s\n' \
+          "$agent_session_label" "$agent_session_kind" "$agent_session_name" \
+          "$agent_session_project"
+      done
+  } | column -ts"$agent_session_tab"
 }
 
 case "${1:-list}" in
   list)    agent_session_list ;;
   pick)    agent_session_pick "${2:-}" ;;
+  state)   agent_session_record_state "${2:-}" ;;
   _picker) agent_session_picker ;;
-  _rows)   agent_session_emit_rows ;;
+  _rows)   agent_session_picker_rows ;;
   _confirm_kill) agent_session_confirm_kill "${2:-}" ;;
   *)
     printf 'agent-session: unknown subcommand: %s\n' "${1:-}" >&2
-    printf 'usage: agent-session [list|pick]\n' >&2
+    printf 'usage: agent-session [list|pick|state <mode>]\n' >&2
     exit 2
     ;;
 esac
