@@ -25,6 +25,11 @@ LIB_DIR="$(unset CDPATH; cd "$(dirname "$SELF_FILE")/../lib" && pwd)"
 AGENT_SESSION_POPUP_WIDTH="${AGENT_SESSION_POPUP_WIDTH:-90%}"
 AGENT_SESSION_POPUP_HEIGHT="${AGENT_SESSION_POPUP_HEIGHT:-90%}"
 
+# picker のヘッダ（通常時）と、kill の二段階確認に使う armed 状態ファイル。
+# 状態ファイルのパスは picker と _confirm_kill の両プロセスで同一に解決される。
+AGENT_SESSION_HEADER='agent sessions · enter: jump · ctrl-x×2: kill'
+AGENT_SESSION_KILL_ARMED="${TMPDIR:-/tmp}/agent-session-kill-armed"
+
 # @agent マーカー付きセッションを "session<TAB>agent<TAB>status<TAB>project" で出力する。
 # status は将来の state hook 用の枠で、現状は常に "?"（一覧・jump・kill のみ）。
 agent_session_emit_rows() {
@@ -94,7 +99,29 @@ agent_session_pick() {
   fi
 }
 
-# popup 内で動く fzf 本体。enter で jump、ctrl-x で kill（+ reload）。
+# ctrl-x の二段階確認。同じセッションを armed 状態にし、2 回目で kill を実行する。
+# fzf の transform バインドから呼ばれ、次に fzf が実行すべきアクション文字列を出力する。
+# 1 回目（未 armed / 別セッション）: 警告ヘッダを出して armed 登録（kill しない）。
+# 2 回目（同一セッションが armed 済み）: kill + 一覧 reload + ヘッダを通常へ戻す。
+agent_session_confirm_kill() {
+  agent_session_target="${1:-}"
+  [ -n "$agent_session_target" ] || { printf 'ignore'; return 0; }
+
+  agent_session_tmux="$(dot_tmux_find_executable)" || { printf 'ignore'; return 0; }
+  agent_session_armed="$(cat "$AGENT_SESSION_KILL_ARMED" 2>/dev/null || true)"
+
+  if [ "$agent_session_armed" = "$agent_session_target" ]; then
+    rm -f "$AGENT_SESSION_KILL_ARMED" 2>/dev/null || true
+    printf 'execute-silent(%s kill-session -t %s)+reload(%s _rows)+change-header(%s)' \
+      "$agent_session_tmux" "$agent_session_target" "$SELF_FILE" "$AGENT_SESSION_HEADER"
+  else
+    printf '%s' "$agent_session_target" > "$AGENT_SESSION_KILL_ARMED" 2>/dev/null || true
+    printf 'change-header(⚠ %s を終了します — もう一度 ctrl-x で実行 / 別操作で取消)' \
+      "$agent_session_target"
+  fi
+}
+
+# popup 内で動く fzf 本体。enter で jump、ctrl-x ×2 で kill（二段階確認）。
 agent_session_picker() {
   agent_session_tmux="$(dot_tmux_find_executable)" || return 0
 
@@ -110,14 +137,17 @@ agent_session_picker() {
     return 0
   fi
 
+  # 起動のたびに armed 状態を初期化し、前回の取り残しで誤って kill しないようにする。
+  rm -f "$AGENT_SESSION_KILL_ARMED" 2>/dev/null || true
+
   agent_session_sel="$(
     printf '%s\n' "$agent_session_rows" | FZF_DEFAULT_OPTS='' fzf \
       --ansi --delimiter='\t' --with-nth=2,3,4 \
       --reverse --cycle \
-      --header='agent sessions · enter: jump · ctrl-x: kill' \
+      --header="$AGENT_SESSION_HEADER" \
       --preview="$agent_session_tmux capture-pane -ept {1}" \
       --preview-window='right,62%,wrap' \
-      --bind="ctrl-x:execute-silent($agent_session_tmux kill-session -t {1})+reload($SELF_FILE _rows)"
+      --bind="ctrl-x:transform:$SELF_FILE _confirm_kill {1}"
   )" || true
 
   [ -n "$agent_session_sel" ] || return 0
@@ -144,6 +174,7 @@ case "${1:-list}" in
   pick)    agent_session_pick "${2:-}" ;;
   _picker) agent_session_picker ;;
   _rows)   agent_session_emit_rows ;;
+  _confirm_kill) agent_session_confirm_kill "${2:-}" ;;
   *)
     printf 'agent-session: unknown subcommand: %s\n' "${1:-}" >&2
     printf 'usage: agent-session [list|pick]\n' >&2
