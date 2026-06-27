@@ -70,10 +70,12 @@ agent_event_normalize() {
       #   claude-prompt   = UserPromptSubmit（ユーザーが作業を渡した直後）
       #   claude-posttool = PostToolUse（ツール実行直後 = 許可承認や質問回答のあと
       #                     作業を再開した合図。waiting からの復帰に使う）
+      # stamp は state/wait_reason しか使わないので cwd は取らない（jq を省く）。
+      # ただし PostToolUse の payload は tool_response 等で大きくなり得るため、
+      # 呼び出し元の stdin 書き込みがブロックしないよう読み捨てる。
       AGENT_EVENT_AGENT=claude
       AGENT_EVENT_STATE=working
-      agent_event_payload="$(cat)"
-      AGENT_EVENT_CWD="$(printf '%s' "$agent_event_payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
+      cat >/dev/null 2>&1 || true
       ;;
     claude-ask)
       # PreToolUse for the AskUserQuestion tool: Claude is waiting on an answer.
@@ -119,10 +121,10 @@ agent_event_normalize() {
       ;;
     codex-prompt|codex-posttool)
       # working へ遷移する Codex のイベント（UserPromptSubmit / PostToolUse）。
+      # working は cwd を使わないので jq を省き、stdin は読み捨てる（claude 側と同様）。
       AGENT_EVENT_AGENT=codex
       AGENT_EVENT_STATE=working
-      agent_event_payload="$(cat)"
-      AGENT_EVENT_CWD="$(printf '%s' "$agent_event_payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
+      cat >/dev/null 2>&1 || true
       ;;
     codex-stop)
       AGENT_EVENT_AGENT=codex

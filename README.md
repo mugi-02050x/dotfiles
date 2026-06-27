@@ -219,7 +219,7 @@ mode と状態の対応:
 | Codex | `PermissionRequest` | `codex-notification` | `waiting:permission` |
 | Codex | `Stop` | `codex-stop` | `idle` |
 
-`PostToolUse` を `working` に割り当てているのは、許可承認や質問回答のあと作業を再開した合図を拾い、`waiting` から `working` へ復帰させるためです（これが無いと次の `Stop` まで `waiting` 表示が居座る）。ツール実行ごとに走るため、`agent-session state` は tmux 呼び出しを 1 回にまとめ、1 回あたり約 30ms に抑えています。
+`PostToolUse` を `working` に割り当てているのは、許可承認や質問回答のあと作業を再開した合図を拾い、`waiting` から `working` へ復帰させるためです（これが無いと次の `Stop` まで `waiting` 表示が居座る）。ツール実行ごとに走るため負荷を抑える工夫を入れている: ① `dot_tmux_mark_agent_state` は tmux 呼び出しを 1 回にチェーン、② pane ごとのマーカーファイルで直近状態を覚え、同一状態なら `date`/`tmux` 呼び出しを丸ごと省く。結果、`working` 連続中のスキップ経路は約 15ms/回、状態変化を伴う書き込みでも約 22ms/回。
 
 Claude Code（`~/.claude/settings.json`、既存の `agent-notify` フックへ追記）:
 
