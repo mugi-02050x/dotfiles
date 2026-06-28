@@ -37,7 +37,7 @@ brew bundle
 |---|---|
 | zsh | `~/.zshrc` |
 | nvim | `~/.config/nvim/` |
-| tmux | `~/.tmux.conf` |
+| tmux | `~/.tmux.conf`, `~/.config/tmux/themes/` |
 | bin | `~/.local/bin/`, `~/.local/lib/` |
 | lazysql | `~/.config/lazysql/` |
 
