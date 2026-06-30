@@ -79,7 +79,7 @@ pane="${TMUX_PANE:-}"
 dot_tmux_send_bell_to_notification_target_window "$pane" "$AGENT_EVENT_CWD"
 
 # status line 右側へ一時通知を出す（issue #55）。SSH でも tmux サーバ側で完結する。
-agent_notifier_show_status_line "$pane" "$AGENT_EVENT_CWD" "$AGENT_EVENT_AGENT" "$label" "$message"
+agent_notifier_show_status_line "$pane" "$AGENT_EVENT_CWD" "$AGENT_EVENT_AGENT" "$label"
 agent_notifier_send_desktop "$SELF_DIR" "$pane" "$AGENT_EVENT_CWD" "$AGENT_EVENT_AGENT" "$label" "$message"
 
 finish 0
