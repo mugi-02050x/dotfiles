@@ -1,7 +1,7 @@
 #!/bin/sh
 # Notification backends and presentation helpers for agent events.
 
-AGENT_NOTIFY_TTL="${AGENT_NOTIFY_TTL:-30}"
+AGENT_NOTIFY_TTL="${AGENT_NOTIFY_TTL:-10}"
 AGENT_NOTIFY_WIDTH="${AGENT_NOTIFY_WIDTH:-70}"
 
 # Collapse newlines and cap the desktop notification body length.
