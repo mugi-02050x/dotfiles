@@ -34,15 +34,13 @@ LIB_DIR="$(unset CDPATH; cd "$(dirname "$SELF_FILE")/../lib" && pwd)"
 AGENT_SESSION_POPUP_WIDTH="${AGENT_SESSION_POPUP_WIDTH:-90%}"
 AGENT_SESSION_POPUP_HEIGHT="${AGENT_SESSION_POPUP_HEIGHT:-90%}"
 
-# picker のヘッダ（通常時）と、kill の二段階確認に使う armed 状態ファイル。
-# 状態ファイルのパスは picker と _confirm_kill の両プロセスで同一に解決される。
+# picker のヘッダ（通常時）。プロセス境界を越えて渡す状態（kill の armed 対象 /
+# picker の選択結果）はファイルではなく tmux のグローバルユーザーオプションで持つ。
+# どちらも別プロセス（fzf transform の _confirm_kill / popup 内の _picker）から同じ tmux
+# サーバへ set/show するだけで共有でき、@agent_picker_parent 等と同じ流儀で一貫させる。
+#   @agent_kill_armed       : kill 二段階確認で 1 回目に armed したセッション名
+#   @agent_picker_selection : _picker が選んだ jump 対象セッション名
 AGENT_SESSION_HEADER='agent sessions · ? でキー操作'
-AGENT_SESSION_KILL_ARMED="${TMPDIR:-/tmp}/agent-session-kill-armed"
-
-# picker の選択結果を _picker（popup 内の attach 先セッションで実行）→ pick（popup 外）へ
-# 渡す一時ファイル。pick が picker セッションへ new-session -e で実パスを注入するため、
-# ここでは env を尊重しつつデフォルトを置く。
-AGENT_SESSION_SELECTION="${AGENT_SESSION_SELECTION:-${TMPDIR:-/tmp}/agent-session-selection}"
 
 # フックから呼ばれ、event.sh の正規化結果を tmux セッションへ刻む。
 # 通知は出さない（それは agent-notify の役目）。状態の解釈だけが責務。
@@ -207,8 +205,8 @@ agent_session_pick() {
   agent_session_key="$(dot_tmux_popup_path_hash "$agent_session_host" 2>/dev/null || true)"
   [ -n "$agent_session_key" ] || agent_session_key="$$"
   agent_session_picker_session="agent-picker-$agent_session_key"
-  agent_session_sel_file="${TMPDIR:-/tmp}/agent-session-selection-$agent_session_key"
-  rm -f "$agent_session_sel_file" 2>/dev/null || true
+  # 選択結果は tmux オプションで _picker から受け取る。今回の選択だけを拾うよう開く前に空へ。
+  "$agent_session_tmux" set-option -g @agent_picker_selection '' 2>/dev/null || true
   "$agent_session_tmux" kill-session -t "$agent_session_picker_session" 2>/dev/null || true
 
   # popup セッションのセル寸法を client 寸法×パーセントで算出。不明（0）なら -x/-y を渡さず
@@ -227,11 +225,9 @@ agent_session_pick() {
   if [ "$agent_session_pw" -gt 0 ] && [ "$agent_session_ph" -gt 0 ]; then
     "$agent_session_tmux" new-session -d -s "$agent_session_picker_session" \
       -x "$agent_session_pw" -y "$agent_session_ph" \
-      -e "AGENT_SESSION_SELECTION=$agent_session_sel_file" \
       "$SELF_FILE _picker"
   else
     "$agent_session_tmux" new-session -d -s "$agent_session_picker_session" \
-      -e "AGENT_SESSION_SELECTION=$agent_session_sel_file" \
       "$SELF_FILE _picker"
   fi
   "$agent_session_tmux" set-option -t "$agent_session_picker_session" window-size latest 2>/dev/null || true
@@ -251,10 +247,8 @@ agent_session_pick() {
   # あれば host 側で対象 agent の popup を開き直す。
   "$agent_session_tmux" kill-session -t "$agent_session_picker_session" 2>/dev/null || true
 
-  agent_session_target=""
-  [ -f "$agent_session_sel_file" ] && \
-    IFS= read -r agent_session_target < "$agent_session_sel_file" 2>/dev/null
-  rm -f "$agent_session_sel_file" 2>/dev/null || true
+  agent_session_target="$("$agent_session_tmux" show-options -gqv @agent_picker_selection 2>/dev/null || true)"
+  "$agent_session_tmux" set-option -gu @agent_picker_selection 2>/dev/null || true
   [ -n "$agent_session_target" ] || return 0
 
   agent_session_jump "$agent_session_target" "$agent_session_host"
@@ -269,14 +263,14 @@ agent_session_confirm_kill() {
   [ -n "$agent_session_target" ] || { printf 'ignore'; return 0; }
 
   agent_session_tmux="$(dot_tmux_find_executable)" || { printf 'ignore'; return 0; }
-  agent_session_armed="$(cat "$AGENT_SESSION_KILL_ARMED" 2>/dev/null || true)"
+  agent_session_armed="$("$agent_session_tmux" show-options -gqv @agent_kill_armed 2>/dev/null || true)"
 
   if [ "$agent_session_armed" = "$agent_session_target" ]; then
-    rm -f "$AGENT_SESSION_KILL_ARMED" 2>/dev/null || true
+    "$agent_session_tmux" set-option -gu @agent_kill_armed 2>/dev/null || true
     printf 'execute-silent(%s kill-session -t %s)+reload(%s _rows)+change-header(%s)' \
       "$agent_session_tmux" "$agent_session_target" "$SELF_FILE" "$AGENT_SESSION_HEADER"
   else
-    printf '%s' "$agent_session_target" > "$AGENT_SESSION_KILL_ARMED" 2>/dev/null || true
+    "$agent_session_tmux" set-option -g @agent_kill_armed "$agent_session_target" 2>/dev/null || true
     printf 'change-header(⚠ %s を終了します — もう一度 ctrl-x で実行 / 別操作で取消)' \
       "$agent_session_target"
   fi
@@ -339,7 +333,7 @@ agent_session_picker() {
   fi
 
   # 起動のたびに armed 状態を初期化し、前回の取り残しで誤って kill しないようにする。
-  rm -f "$AGENT_SESSION_KILL_ARMED" 2>/dev/null || true
+  "$agent_session_tmux" set-option -gu @agent_kill_armed 2>/dev/null || true
 
   # SC2016: --bind 内の $FZF_INPUT_STATE は親シェルではなく fzf の transform 子シェルで
   # 展開させたいので、シングルクォートのまま（展開させない）が正しい。
@@ -366,9 +360,10 @@ agent_session_picker() {
   [ -n "$agent_session_sel" ] || return 0
   agent_session_target="$(printf '%s' "$agent_session_sel" | cut -f2)"
   [ -n "$agent_session_target" ] || return 0
-  # popup 内（attach 先セッション）から自前で attach せず、選択をファイルへ書いて return する。
-  # popup が閉じた後に pick がこれを読み、host 側で jump する（二重ネスト回避は jump 参照）。
-  printf '%s\n' "$agent_session_target" > "$AGENT_SESSION_SELECTION" 2>/dev/null || true
+  # popup 内（attach 先セッション）から自前で attach せず、選択を tmux オプションへ書いて
+  # return する。popup が閉じた後に pick がこれを読み、host 側で jump する（二重ネスト回避は
+  # jump 参照）。
+  "$agent_session_tmux" set-option -g @agent_picker_selection "$agent_session_target" 2>/dev/null || true
 }
 
 # 人間向けのテキスト一覧。STATE を一番左に、可変幅・全角を含み得る PROJECT を末尾に置く。
