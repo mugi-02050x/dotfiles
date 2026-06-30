@@ -33,7 +33,7 @@ AGENT_SESSION_POPUP_HEIGHT="${AGENT_SESSION_POPUP_HEIGHT:-90%}"
 
 # picker のヘッダ（通常時）と、kill の二段階確認に使う armed 状態ファイル。
 # 状態ファイルのパスは picker と _confirm_kill の両プロセスで同一に解決される。
-AGENT_SESSION_HEADER='agent sessions · enter: jump · ctrl-x×2: kill · ctrl-r: refresh'
+AGENT_SESSION_HEADER='agent sessions · ? でキー操作'
 AGENT_SESSION_KILL_ARMED="${TMPDIR:-/tmp}/agent-session-kill-armed"
 
 # フックから呼ばれ、event.sh の正規化結果を tmux セッションへ刻む。
@@ -202,7 +202,47 @@ agent_session_confirm_kill() {
   fi
 }
 
-# popup 内で動く fzf 本体。enter で jump、ctrl-x ×2 で kill（二段階確認）。
+# picker の `?` バインドから fzf の execute 経由で呼ばれ、キー操作一覧をオーバーレイ表示する。
+# tmux はクライアントにつき popup が 1 つしか持てず popup-in-popup を重ねられないため、
+# fzf の画面を一時的に消して同じ領域の左上にヘルプを描画し、q / esc が押されるまで待つ。
+# less は画面全体を使い esc で閉じられないため使わず、自前で 1 キー待ちにしている。
+# execute から戻ると fzf が画面を再描画するため、消した内容は元に戻る。
+agent_session_help() {
+  agent_session_help_text="$(cat <<'EOF'
+agent-session — キー操作
+
+ナビゲーション（ノーマルモード）
+  j / k / ↑ ↓    カーソル移動
+  i  または  /   検索入力モードへ
+  enter          選択セッションへ復帰（jump）
+  ctrl-x ×2      選択セッションを終了（kill）
+  ctrl-r         一覧を更新
+  q / esc        picker を閉じる
+  ?              このヘルプ
+
+検索入力モード（i // で移行）
+  文字入力        セッションを絞り込み
+  esc            検索を抜けてノーマルモードへ
+  enter          選択セッションへ復帰
+
+  （閉じる: q / esc）
+EOF
+)"
+
+  # \033[2J で全消去、\033[H でカーソルを左上(1,1)へ。以後ヘルプは左上から描画される。
+  printf '\033[2J\033[H%s\n' "$agent_session_help_text"
+  # 1 キーずつ読み、q または esc(\033) で閉じる。それ以外のキーは無視。
+  while IFS= read -rsn1 agent_session_help_key; do
+    case "$agent_session_help_key" in
+      q | "$(printf '\033')") break ;;
+    esac
+  done
+}
+
+# popup 内で動く fzf 本体。--no-input で「ノーマルモード」起動し、i / で検索入力モードへ
+# 移行するモーダル UI。各キーは $FZF_INPUT_STATE（enabled=検索入力中）で分岐させ、検索中は
+# その文字を put、ノーマル時はアクション（移動/検索開始/終了）にする。enter で jump、
+# ctrl-x ×2 で kill（二段階確認）、q / esc で終了（popup を閉じる）。
 agent_session_picker() {
   agent_session_tmux="$(dot_tmux_find_executable)" || return 0
 
@@ -221,15 +261,25 @@ agent_session_picker() {
   # 起動のたびに armed 状態を初期化し、前回の取り残しで誤って kill しないようにする。
   rm -f "$AGENT_SESSION_KILL_ARMED" 2>/dev/null || true
 
+  # SC2016: --bind 内の $FZF_INPUT_STATE は親シェルではなく fzf の transform 子シェルで
+  # 展開させたいので、シングルクォートのまま（展開させない）が正しい。
+  # shellcheck disable=SC2016
   agent_session_sel="$(
     printf '%s\n' "$agent_session_rows" | FZF_DEFAULT_OPTS='' fzf \
       --ansi --delimiter='\t' --with-nth=1 \
-      --reverse --cycle \
+      --reverse --cycle --no-input \
       --header="$AGENT_SESSION_HEADER" \
       --preview="$agent_session_tmux capture-pane -ept {2}" \
       --preview-window='right,62%,wrap' \
       --bind="ctrl-x:transform:$SELF_FILE _confirm_kill {2}" \
-      --bind="ctrl-r:reload($SELF_FILE _rows)"
+      --bind="ctrl-r:reload($SELF_FILE _rows)" \
+      --bind='i:transform:[ "$FZF_INPUT_STATE" = enabled ] && echo "put(i)" || echo show-input' \
+      --bind='/:transform:[ "$FZF_INPUT_STATE" = enabled ] && echo "put(/)" || echo show-input' \
+      --bind='j:transform:[ "$FZF_INPUT_STATE" = enabled ] && echo "put(j)" || echo down' \
+      --bind='k:transform:[ "$FZF_INPUT_STATE" = enabled ] && echo "put(k)" || echo up' \
+      --bind='q:transform:[ "$FZF_INPUT_STATE" = enabled ] && echo "put(q)" || echo abort' \
+      --bind='esc:transform:[ "$FZF_INPUT_STATE" = enabled ] && echo "clear-query+hide-input" || echo abort' \
+      --bind="?:transform:[ \"\$FZF_INPUT_STATE\" = enabled ] && echo 'put(?)' || echo 'execute($SELF_FILE _help)'"
   )" || true
 
   [ -n "$agent_session_sel" ] || return 0
@@ -264,6 +314,7 @@ case "${1:-list}" in
   state)   agent_session_record_state "${2:-}" ;;
   _picker) agent_session_picker ;;
   _rows)   agent_session_picker_rows ;;
+  _help)   agent_session_help ;;
   _confirm_kill) agent_session_confirm_kill "${2:-}" ;;
   *)
     printf 'agent-session: unknown subcommand: %s\n' "${1:-}" >&2
