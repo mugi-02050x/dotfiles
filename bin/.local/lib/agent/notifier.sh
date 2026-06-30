@@ -1,7 +1,7 @@
 #!/bin/sh
 # Notification backends and presentation helpers for agent events.
 
-AGENT_NOTIFY_TTL="${AGENT_NOTIFY_TTL:-10}"
+AGENT_NOTIFY_TTL="${AGENT_NOTIFY_TTL:-60}"
 AGENT_NOTIFY_WIDTH="${AGENT_NOTIFY_WIDTH:-70}"
 
 # Collapse newlines and cap the desktop notification body length.
@@ -45,7 +45,6 @@ agent_notifier_show_status_line() {
   agent_notifier_cwd="${2:-}"
   agent_notifier_agent="${3:-}"
   agent_notifier_state="${4:-}"
-  agent_notifier_message="${5:-}"
 
   agent_notifier_tmux="$(dot_tmux_find_executable)" || return 0
   agent_notifier_project="$(basename "$agent_notifier_cwd")"
@@ -53,7 +52,9 @@ agent_notifier_show_status_line() {
   # window ラベル(#I:#W)はリポジトリ名=パス basename と重複するため、ラベルがあれば
   # それを location に使い、取れない場合だけプロジェクト名へフォールバックする。
   agent_notifier_location="${agent_notifier_win:-$agent_notifier_project}"
-  agent_notifier_text="$agent_notifier_location $agent_notifier_agent ▸ $agent_notifier_state: $agent_notifier_message"
+  # status line にはメッセージ本文を出さず、場所・agent・状態までに留める（issue #76）。
+  # メッセージはデスクトップ通知側（agent_notifier_send_desktop）にのみ渡す。
+  agent_notifier_text="$agent_notifier_location $agent_notifier_agent ▸ $agent_notifier_state"
   # Collapse control characters before storing the text in a global tmux option.
   agent_notifier_text="$(printf '%s' "$agent_notifier_text" | tr '\n\r\t' '   ' | agent_notifier_clip_width "$AGENT_NOTIFY_WIDTH")"
   agent_notifier_token="$$-$(date +%s 2>/dev/null || echo 0)"
