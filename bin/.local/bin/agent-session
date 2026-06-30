@@ -17,7 +17,7 @@
 #
 # 使い方:
 #   agent-session list             # 稼働中 agent をテキストで一覧表示
-#   agent-session pick [session]    # fzf picker を popup で開く（キーバインド入口）
+#   agent-session pick [session] [w] [h]  # picker を attach 方式の popup で開く（入口）
 #   agent-session state <mode>      # フックから状態を刻む（stdin に payload）
 #   agent-session _picker           # （内部）popup 内で動く fzf 本体
 #   agent-session _rows             # （内部）picker の行データ（fzf reload 用）
@@ -38,6 +38,11 @@ AGENT_SESSION_POPUP_HEIGHT="${AGENT_SESSION_POPUP_HEIGHT:-90%}"
 # 状態ファイルのパスは picker と _confirm_kill の両プロセスで同一に解決される。
 AGENT_SESSION_HEADER='agent sessions · ? でキー操作'
 AGENT_SESSION_KILL_ARMED="${TMPDIR:-/tmp}/agent-session-kill-armed"
+
+# picker の選択結果を _picker（popup 内の attach 先セッションで実行）→ pick（popup 外）へ
+# 渡す一時ファイル。pick が picker セッションへ new-session -e で実パスを注入するため、
+# ここでは env を尊重しつつデフォルトを置く。
+AGENT_SESSION_SELECTION="${AGENT_SESSION_SELECTION:-${TMPDIR:-/tmp}/agent-session-selection}"
 
 # フックから呼ばれ、event.sh の正規化結果を tmux セッションへ刻む。
 # 通知は出さない（それは agent-notify の役目）。状態の解釈だけが責務。
@@ -129,37 +134,61 @@ agent_session_picker_rows() {
     done
 }
 
-# 対象 popup セッションへ復帰する。起動元 window へメインクライアントを移してから、
-# この popup 内で対象セッションへアタッチし直す（lib の jump 挙動に合わせる）。
+# 対象 popup セッションへ復帰する。picker の popup が閉じた後に pick から（クライアント
+# を持たない run-shell 文脈で）呼ばれるため、自前で attach せず host クライアント上に対象
+# agent の popup を開き直す。起動元 window へ host を戻してから開くので、popup を閉じた後は
+# 元の場所へ帰れる。これで popup→picker→target の二重ネスト（agent 側 prefix が二段化）を
+# 避け、agent は従来どおり単層 popup として現れる。
 agent_session_jump() {
   agent_session_target="${1:-}"
+  agent_session_host="${2:-}"
   [ -n "$agent_session_target" ] || return 0
 
   agent_session_tmux="$(dot_tmux_find_executable)" || return 0
-  agent_session_parent="$("$agent_session_tmux" show-options -gqv @agent_picker_parent 2>/dev/null || true)"
-  [ -n "$agent_session_parent" ] || agent_session_parent="$(dot_tmux_find_main_client || true)"
+  [ -n "$agent_session_host" ] || agent_session_host="$("$agent_session_tmux" show-options -gqv @agent_picker_parent 2>/dev/null || true)"
+  [ -n "$agent_session_host" ] || agent_session_host="$(dot_tmux_find_main_client || true)"
 
   agent_session_pane="$("$agent_session_tmux" display-message -p -t "$agent_session_target" '#{pane_id}' 2>/dev/null || true)"
   agent_session_origin="$(dot_tmux_resolve_origin_window "$agent_session_pane" || true)"
-  if [ -n "$agent_session_origin" ] && [ -n "$agent_session_parent" ]; then
+  if [ -n "$agent_session_origin" ] && [ -n "$agent_session_host" ]; then
     agent_session_origin_session="${agent_session_origin%%|*}"
     agent_session_origin_rest="${agent_session_origin#*|}"
     agent_session_origin_window="${agent_session_origin_rest%%|*}"
-    "$agent_session_tmux" switch-client -c "$agent_session_parent" -t "$agent_session_origin_session" 2>/dev/null || true
+    "$agent_session_tmux" switch-client -c "$agent_session_host" -t "$agent_session_origin_session" 2>/dev/null || true
     "$agent_session_tmux" select-window -t "$agent_session_origin_window" 2>/dev/null || true
   fi
 
-  exec "$agent_session_tmux" attach-session -t "$agent_session_target"
+  if [ -n "$agent_session_host" ]; then
+    "$agent_session_tmux" display-popup -c "$agent_session_host" \
+      -w "$AGENT_SESSION_POPUP_WIDTH" -h "$AGENT_SESSION_POPUP_HEIGHT" \
+      -E "$agent_session_tmux attach-session -t $agent_session_target"
+  else
+    "$agent_session_tmux" display-popup \
+      -w "$AGENT_SESSION_POPUP_WIDTH" -h "$AGENT_SESSION_POPUP_HEIGHT" \
+      -E "$agent_session_tmux attach-session -t $agent_session_target"
+  fi
 }
 
-# キーバインド入口。popup 内から呼ばれた場合はその popup を閉じてから、メイン
-# クライアント上で picker を開く（popup-in-popup を避ける）。
+# キーバインド入口。picker を「専用セッションへ attach する popup」として host クライアント
+# 上に開く。fzf 直起動だと popup が tmux クライアントにならず、picker を開いている間は
+# prefix バインドが届かず他ツールの入れ子 popup も開けなかった。attach 方式にすると popup
+# 自身が tmux クライアントになり、中から prefix+g 等の入れ子 popup を開けるようになる。
+# 引数: $1=呼出元セッション名 $2=client_width $3=client_height（セルサイズの初期値に使う）。
 agent_session_pick() {
   agent_session_current="${1:-}"
+  agent_session_cw="${2:-0}"
+  agent_session_ch="${3:-0}"
   agent_session_tmux="$(dot_tmux_find_executable)" || return 0
   [ -n "$agent_session_current" ] || \
     agent_session_current="$("$agent_session_tmux" display-message -p '#{session_name}' 2>/dev/null || true)"
 
+  # picker 自身（attach 先セッション）の中から prefix+a を押した場合は何もしない。
+  # 再入で picker セッションを作り直すと、外側 pick の後始末と競合して残骸 kill 等が
+  # 噛み合わなくなるため、構造的に no-op にして増殖と競合を断つ。
+  case "$agent_session_current" in agent-picker-*) return 0 ;; esac
+
+  # 他の popup（claude 等）内から呼ばれた場合は、その popup を閉じてから host 上で開き直す
+  # （host の唯一の popup 枠を空け、popup-in-popup を避ける）。
   if [ -n "$agent_session_current" ] && dot_tmux_is_popup_session "$agent_session_current"; then
     "$agent_session_tmux" detach-client -s "$agent_session_current" 2>/dev/null || true
     agent_session_i=0
@@ -172,15 +201,63 @@ agent_session_pick() {
   agent_session_host="$(dot_tmux_find_main_client || true)"
   "$agent_session_tmux" set-option -g @agent_picker_parent "$agent_session_host" 2>/dev/null || true
 
+  # セッション名は host 由来の安定キーにして「1 クライアント 1 つ」へ正規化する。同一 host
+  # から何度開いても同名なので無制限に増えず、残骸は作る前に kill して自己修復する。
+  # @popup=1 を付与し main client 誤検出を防ぎ、@agent は付けず自分自身を一覧へ出さない。
+  agent_session_key="$(dot_tmux_popup_path_hash "$agent_session_host" 2>/dev/null || true)"
+  [ -n "$agent_session_key" ] || agent_session_key="$$"
+  agent_session_picker_session="agent-picker-$agent_session_key"
+  agent_session_sel_file="${TMPDIR:-/tmp}/agent-session-selection-$agent_session_key"
+  rm -f "$agent_session_sel_file" 2>/dev/null || true
+  "$agent_session_tmux" kill-session -t "$agent_session_picker_session" 2>/dev/null || true
+
+  # popup セッションのセル寸法を client 寸法×パーセントで算出。不明（0）なら -x/-y を渡さず
+  # window-size latest に委ね、attach 時の popup サイズへ追従させる。
+  agent_session_pw=0
+  agent_session_ph=0
+  case "$AGENT_SESSION_POPUP_WIDTH" in
+    *%) [ "$agent_session_cw" -gt 0 ] 2>/dev/null && \
+        agent_session_pw=$((agent_session_cw * ${AGENT_SESSION_POPUP_WIDTH%\%} / 100)) ;;
+  esac
+  case "$AGENT_SESSION_POPUP_HEIGHT" in
+    *%) [ "$agent_session_ch" -gt 0 ] 2>/dev/null && \
+        agent_session_ph=$((agent_session_ch * ${AGENT_SESSION_POPUP_HEIGHT%\%} / 100)) ;;
+  esac
+
+  if [ "$agent_session_pw" -gt 0 ] && [ "$agent_session_ph" -gt 0 ]; then
+    "$agent_session_tmux" new-session -d -s "$agent_session_picker_session" \
+      -x "$agent_session_pw" -y "$agent_session_ph" \
+      -e "AGENT_SESSION_SELECTION=$agent_session_sel_file" \
+      "$SELF_FILE _picker"
+  else
+    "$agent_session_tmux" new-session -d -s "$agent_session_picker_session" \
+      -e "AGENT_SESSION_SELECTION=$agent_session_sel_file" \
+      "$SELF_FILE _picker"
+  fi
+  "$agent_session_tmux" set-option -t "$agent_session_picker_session" window-size latest 2>/dev/null || true
+  "$agent_session_tmux" set-option -t "$agent_session_picker_session" @popup 1 2>/dev/null || true
+
   if [ -n "$agent_session_host" ]; then
     "$agent_session_tmux" display-popup -c "$agent_session_host" \
       -w "$AGENT_SESSION_POPUP_WIDTH" -h "$AGENT_SESSION_POPUP_HEIGHT" \
-      -E "$SELF_FILE _picker"
+      -E "$agent_session_tmux attach-session -t $agent_session_picker_session"
   else
     "$agent_session_tmux" display-popup \
       -w "$AGENT_SESSION_POPUP_WIDTH" -h "$AGENT_SESSION_POPUP_HEIGHT" \
-      -E "$SELF_FILE _picker"
+      -E "$agent_session_tmux attach-session -t $agent_session_picker_session"
   fi
+
+  # popup が閉じた（abort / 選択）後の後始末。picker セッションを確実に回収し、選択が
+  # あれば host 側で対象 agent の popup を開き直す。
+  "$agent_session_tmux" kill-session -t "$agent_session_picker_session" 2>/dev/null || true
+
+  agent_session_target=""
+  [ -f "$agent_session_sel_file" ] && \
+    IFS= read -r agent_session_target < "$agent_session_sel_file" 2>/dev/null
+  rm -f "$agent_session_sel_file" 2>/dev/null || true
+  [ -n "$agent_session_target" ] || return 0
+
+  agent_session_jump "$agent_session_target" "$agent_session_host"
 }
 
 # ctrl-x の二段階確認。同じセッションを armed 状態にし、2 回目で kill を実行する。
@@ -220,7 +297,7 @@ agent-session — キー操作
   enter          選択セッションへ復帰（jump）
   ctrl-x ×2      選択セッションを終了（kill）
   ctrl-r         一覧を更新
-  q / esc        picker を閉じる
+  q / esc / ctrl-d  picker を閉じる
   ?              このヘルプ
 
 検索入力モード（i // で移行）
@@ -228,7 +305,7 @@ agent-session — キー操作
   esc            検索を抜けてノーマルモードへ
   enter          選択セッションへ復帰
 
-  （閉じる: q / esc）
+  （閉じる: q / esc / ctrl-d）
 EOF
 )"
 
@@ -282,12 +359,16 @@ agent_session_picker() {
       --bind='k:transform:[ "$FZF_INPUT_STATE" = enabled ] && echo "put(k)" || echo up' \
       --bind='q:transform:[ "$FZF_INPUT_STATE" = enabled ] && echo "put(q)" || echo abort' \
       --bind='esc:transform:[ "$FZF_INPUT_STATE" = enabled ] && echo "clear-query+hide-input" || echo abort' \
+      --bind='ctrl-d:transform:[ "$FZF_INPUT_STATE" = enabled ] && echo "delete-char" || echo abort' \
       --bind="?:transform:[ \"\$FZF_INPUT_STATE\" = enabled ] && echo 'put(?)' || echo 'execute($SELF_FILE _help)'"
   )" || true
 
   [ -n "$agent_session_sel" ] || return 0
   agent_session_target="$(printf '%s' "$agent_session_sel" | cut -f2)"
-  agent_session_jump "$agent_session_target"
+  [ -n "$agent_session_target" ] || return 0
+  # popup 内（attach 先セッション）から自前で attach せず、選択をファイルへ書いて return する。
+  # popup が閉じた後に pick がこれを読み、host 側で jump する（二重ネスト回避は jump 参照）。
+  printf '%s\n' "$agent_session_target" > "$AGENT_SESSION_SELECTION" 2>/dev/null || true
 }
 
 # 人間向けのテキスト一覧。STATE を一番左に、可変幅・全角を含み得る PROJECT を末尾に置く。
@@ -313,7 +394,7 @@ agent_session_list() {
 
 case "${1:-list}" in
   list)    agent_session_list ;;
-  pick)    agent_session_pick "${2:-}" ;;
+  pick)    agent_session_pick "${2:-}" "${3:-}" "${4:-}" ;;
   state)   agent_session_record_state "${2:-}" ;;
   _picker) agent_session_picker ;;
   _rows)   agent_session_picker_rows ;;
