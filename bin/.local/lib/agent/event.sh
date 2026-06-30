@@ -7,6 +7,19 @@
 # wait_reason qualifies the waiting state only (permission / question / input);
 # it is empty for working and idle. Consumers interpret these on their own:
 # agent-notify renders notifications, agent-session stamps the tmux session.
+#
+# Claude hook -> mode mapping (state is derived from which event fired, not from
+# message text). Modes are reused across hooks when the resulting state is the same:
+#   UserPromptSubmit       -> claude-prompt      (working)
+#   PreToolUse(AskUserQ.)  -> claude-ask         (waiting/question)
+#   PermissionRequest      -> claude-permission  (waiting/permission; before approval)
+#   PostToolUse            -> claude-posttool    (working; resume after wait)
+#   PostToolUseFailure     -> claude-posttool    (working; reused — tool failed but the
+#                                                 turn is still progressing)
+#   PermissionDenied       -> claude-posttool    (working; reused — deny ends the wait)
+#   Notification           -> claude-notification (waiting; text-classified fallback)
+#   Stop                   -> claude-stop        (idle)
+#   StopFailure            -> claude-stop        (idle; reused — API error ends the turn)
 
 # These globals form this library's public surface; they are read by sourcing
 # scripts (agent-notify / agent-session), so shellcheck cannot see their use here.
@@ -87,6 +100,19 @@ agent_event_normalize() {
       AGENT_EVENT_MESSAGE="$(printf '%s' "$agent_event_payload" | jq -r '
         .tool_input.questions[0].question // empty
       ' 2>/dev/null || true)"
+      ;;
+    claude-permission)
+      # PermissionRequest hook: a permission dialog is shown (before approval, so the
+      # tool has NOT run yet). This stamps waiting/permission directly from the event
+      # instead of guessing from notification text, so the classification is robust to
+      # message wording. Plan approval arrives here too (tool_name = ExitPlanMode);
+      # reason stays "permission" — agent-notify renders both as 承認待ち.
+      AGENT_EVENT_AGENT=claude
+      AGENT_EVENT_STATE=waiting
+      AGENT_EVENT_WAIT_REASON=permission
+      agent_event_payload="$(cat)"
+      AGENT_EVENT_CWD="$(printf '%s' "$agent_event_payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
+      AGENT_EVENT_MESSAGE="$(printf '%s' "$agent_event_payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
       ;;
     claude-stop)
       AGENT_EVENT_AGENT=claude

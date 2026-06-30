@@ -10,7 +10,10 @@
 # 状態（working/waiting/idle）は @agent_state / @agent_wait_reason として各セッションに
 # 刻まれる。刻むのは Claude/Codex のフックから呼ばれる `state`
 # サブコマンドで、event.sh が payload を working/waiting/idle + wait_reason へ正規化する
-# （agent-notify と同じ分類器を使い、解釈だけ別。issue #52 / #64 参照）。
+# （agent-notify と同じ分類器を使い、解釈だけ別。issue #52 / #64 / #72 参照）。
+# 状態はどのフックが鳴ったかで決まる（文言推測しない）。フック→モード対応は
+# event.sh のヘッダ参照。working 復帰は成功/失敗/deny を網羅し、PermissionRequest で
+# 承認待ちを文言非依存に判定する。
 #
 # 使い方:
 #   agent-session list             # 稼働中 agent をテキストで一覧表示
